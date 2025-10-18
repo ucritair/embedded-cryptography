@@ -1,0 +1,7 @@
+[rust library build]
+cargo build --target=thumbv8m.main-none-eabihf --no-default-features --features "ffi, alloc" --release
+
+[rp2350 binary build]
+cmake -S . -B build -DPICO_PLATFORM=rp2350 CMAKE_BUILD_TYPE=RelWithDebInfo
+cd build
+make

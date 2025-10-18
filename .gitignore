@@ -1,4 +1,5 @@
 /target
+/rp2350/build
 
 # C example build artifacts
 /examples/ffi_c/e2e

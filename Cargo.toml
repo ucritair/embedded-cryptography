@@ -12,7 +12,9 @@ crate-type = ["lib", "staticlib"]
 [features]
 default = ["std"]        # std by default
 std = []                 # enables std
-alloc = ["dep:dlmalloc"] # for no_std + alloc -> bring in dlmalloc
+#alloc = ["dep:dlmalloc"] # for no_std + alloc -> bring in dlmalloc
+# griffon
+alloc = ["dep:embedded-alloc"] # for no_std + alloc -> bring in embedded-alloc
 ffi = ["alloc"]          # C FFI bindings
 
 [profile.release]
@@ -26,6 +28,13 @@ debug = 1
 panic = "abort"
 
 [dependencies]
+# If you're not going to use a Board Support Package you'll need these:
+rp235x-hal = { version = "0.3", features = [
+    "rt",
+    "critical-section-impl",
+    "binary-info",
+] }
+
 rand_chacha = { version = "0.9", default-features = false }
 rand = { version = "0.9", default-features = false }
 aes = { version = "0.8.4", default-features = false }
@@ -44,10 +53,12 @@ p3-poseidon2 = "0.3.0"
 p3-poseidon2-air = "0.3.0"
 p3-symmetric = "0.3.0"
 p3-uni-stark = "0.3.0"
-dlmalloc = { version = "0.2", default-features = false, features = ["global"], optional = true }
+#dlmalloc = { version = "0.2", default-features = false, features = ["global"], optional = true }
+embedded-alloc = { version = "0.6.0", optional = true }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde-big-array = "0.5"
+embedded-hal = "1.0.0"
 
 [build-dependencies]
 cbindgen = "0.29"

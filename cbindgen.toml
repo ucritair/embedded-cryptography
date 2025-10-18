@@ -31,6 +31,9 @@ include = [
   "zkp_pack_args",
   "BATTERY_API_VERSION",
   "battery_api_version",
+  "griffon_heap_init",
+  "griffon_heap_used",
+  "griffon_heap_free",
 ]
 exclude = [
   "tfhe_pk_encrypt_aes_key_legacy",

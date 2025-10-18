@@ -41,6 +41,12 @@
 
 void rust_eh_personality(void);
 
+uint32_t griffon_heap_used(void);
+
+uint32_t griffon_heap_free(void);
+
+void griffon_heap_init(size_t heap_start_addr, size_t heap_size);
+
 uint32_t battery_api_version(void);
 
 /**
