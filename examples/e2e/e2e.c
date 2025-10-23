@@ -54,7 +54,9 @@ int main(int argc, char** argv) {
     const char* mode = (argc > 1) ? argv[1] : "both"; // modes: "zkp", "tfhe", "both"
     // ZKP: generate public values (e.g., Merkle root)  and zk proof for a provided leaf & path
     // Use a compile-time constant to avoid VLA warnings
-    enum { LEVELS = 32 }; // demo depth
+    // The ZKP trace adds an initial row for hash(nonce||leaf),
+    // so `levels + 1` must be a power of two. For a depth-32 demo, pass 31 here.
+    enum { LEVELS = 31 }; // demo depth -> rows = 32
     uint32_t leaf8_u32[8];
     uint32_t neighbors8_by_level_u32[LEVELS * 8];
     uint8_t sides[LEVELS];
@@ -87,6 +89,7 @@ int main(int argc, char** argv) {
         memsnap_t base; read_memsnap(&base);
         unsigned char proof_buf[1<<19]; // 0.5 MiB demo buffer
         size_t proof_written = 0;
+        // zkp_generate_proof returns a postcard-serialized bundle: (proof, public_values)
         rc = zkp_generate_proof(args_buf,
                                 args_len,
                                 zkp_nonce,
@@ -145,11 +148,11 @@ int main(int argc, char** argv) {
 
         // Baseline before TFHE encrypt
         memsnap_t base; read_memsnap(&base);
-        printf("[info] Encrypting AES key with TFHE PK...\n");
-        rc = tfhe_pk_encrypt_aes_key(pk_buf, pk_len, aes_key, seed, BATTERY_SEED_LEN,
+        printf("[info] Encrypting AES key (generic tfhe_pk_encrypt)...\n");
+        rc = tfhe_pk_encrypt(pk_buf, pk_len, aes_key, AES_KEY_LEN, seed, BATTERY_SEED_LEN,
                                      ct_buf, sizeof ct_buf, &ct_written);
         if (rc != BATTERY_OK) {
-            fprintf(stderr, "tfhe_pk_encrypt_aes_key failed: %s (%d)\n", battery_strerror(rc), rc);
+            fprintf(stderr, "tfhe_pk_encrypt failed: %s (%d)\n", battery_strerror(rc), rc);
             return 1;
         }
         printf("[info] CT (postcard) length: %zu bytes\n", ct_written);
