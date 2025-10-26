@@ -1,54 +1,24 @@
 cmake_minimum_required(VERSION 3.13)
 
-# initialize the SDK directly
-include(./pico_sdk_import.cmake)
+# Set the SDK path directly to the local submodule
+set(PICO_SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/pico-sdk)
 
-project(my_project)
+# Pull in SDK (must be before project)
+include(${PICO_SDK_PATH}/pico_sdk_init.cmake)
+
+project(pico_top_level_project C CXX ASM)
 
 # initialize the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# rest of your project
-
-# XXX: horrible kludge to fix the pico-sdk hard coding -mfloat-abi=softfp (pico-sdk/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake)
-#	we need to change from "softfp" to "hard" to be compatible with the rust compiler settings for the rp2350 platform
-
-string(REPLACE "-mfloat-abi=softfp" "-mfloat-abi=hard" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
-string(REPLACE "-mfloat-abi=softfp" "-mfloat-abi=hard" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
-string(REPLACE "-mfloat-abi=softfp" "-mfloat-abi=hard" CMAKE_ASM_FLAGS ${CMAKE_ASM_FLAGS})
-
-
-add_executable(test
-	test.c
-#	battery_e2e.c
+# --- TinyFrame ---
+add_library(tinyframe STATIC
+    TinyFrame/TinyFrame.c
+)
+target_include_directories(tinyframe PUBLIC
+    TinyFrame
+    src
 )
 
-target_compile_definitions(test PUBLIC
-	PICO_USE_STACK_GUARDS=1
-	PICO_STACK_SIZE=4096
-)
-#target_compile_definitions(test PUBLIC PARAM_ASSERTIONS_ENABLE_ALL=1)
-
-
-target_include_directories(test PRIVATE
-	${CMAKE_CURRENT_LIST_DIR}/
-	${CMAKE_CURRENT_LIST_DIR}/include
-)
-
-# Add pico_stdlib library which aggregates commonly used features
-target_link_libraries(test
-	pico_malloc
-	pico_stdlib
-	pico_multicore
-	hardware_dma
-	${CMAKE_CURRENT_SOURCE_DIR}/lib/libbattery_embedded.a
-)
-
-#pico_set_linker_script(test ${CMAKE_CURRENT_SOURCE_DIR}/memmap_griffon.ld)
-
-pico_enable_stdio_usb(test 1)
-pico_enable_stdio_uart(test 0)
-
-# create map/bin/hex/uf2 file in addition to ELF.
-pico_add_extra_outputs(test)
-
+# Add the subdirectory for our project
+add_subdirectory(src)
