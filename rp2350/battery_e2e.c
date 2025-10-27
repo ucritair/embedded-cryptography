@@ -1,0 +1,178 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+
+#include "include/battery.h"
+#include "include/battery_helpers.h"
+
+
+
+// for benchmarking with time_us_64()
+#include "pico/stdlib.h"
+
+// benchmarking
+#define B_USE printf("+++ HEAP USE: %lu\n", griffon_heap_used());
+
+#define B_START bench_start = time_us_64();
+#define B_STOP  bench_stop = time_us_64() - bench_start;
+#define B_SP(a) B_STOP B_USE printf("\n*** %s EXEC TIME: %llu us\n\n", a, bench_stop);
+
+
+int battery_e2e () {
+    printf("%s(): start\n", __FUNCTION__);
+
+B_USE
+
+    // for griffon's execution time benchmark
+    uint64_t bench_start;
+    uint64_t bench_stop;
+
+    //const char* mode = (argc > 1) ? argv[1] : "both"; // modes: "zkp", "tfhe", "both"
+    const char* mode = "both";
+
+    printf("MODE: %s\n", mode);
+
+
+    // ZKP: generate public values (e.g., Merkle root)  and zk proof for a provided leaf & path
+    // Use a compile-time constant to avoid VLA warnings
+    enum { LEVELS = 32 }; // demo depth
+    uint32_t leaf8_u32[8];
+    uint32_t neighbors8_by_level_u32[LEVELS * 8];
+    uint8_t sides[LEVELS];
+    for (int i = 0; i < 8; i++) leaf8_u32[i] = 4; // demo leaf values
+    for (size_t l = 0; l < LEVELS; l++) {
+        for (int j = 0; j < 8; j++) neighbors8_by_level_u32[l*8 + j] = 3; // demo neighbors
+        sides[l] = 0; // 0 = right, non-zero = left; require sides[0] == 0
+    }
+    uint8_t zkp_nonce[BATTERY_NONCE_LEN];
+    memset(zkp_nonce, 0x11, sizeof zkp_nonce);
+
+B_USE
+
+    //mem_init();
+    //memsnap_t m0; read_memsnap(&m0);
+    printf("[info] Packing ZKP args...\n");
+    unsigned char args_buf[1<<16];
+    size_t args_len = 0;
+B_START
+    int rc = zkp_pack_args(leaf8_u32,
+                           neighbors8_by_level_u32,
+                           sides,
+                           LEVELS,
+                           args_buf,
+                           sizeof args_buf,
+                           &args_len);
+B_SP("zkp_pack_args()")
+    if (rc != BATTERY_OK) {
+        fprintf(stderr, "zkp_pack_args failed: %s (%d)\n", battery_strerror(rc), rc);
+        return 1;
+    }
+
+    if (strcmp(mode, "zkp") == 0 || strcmp(mode, "both") == 0) {
+        printf("[info] Generating ZKP proof...\n");
+        // Baseline before the heavy operation
+        //memsnap_t base; read_memsnap(&base);
+        unsigned char proof_buf[1<<19]; // 0.5 MiB demo buffer
+        size_t proof_written = 0;
+B_START
+        rc = zkp_generate_proof(args_buf,
+                                args_len,
+                                zkp_nonce,
+                                proof_buf,
+                                sizeof proof_buf,
+                                &proof_written);
+B_SP("zkp_generate_proof()")
+        if (rc != BATTERY_OK) {
+            fprintf(stderr, "zkp_generate_proof failed: %s (%d)\n", battery_strerror(rc), rc);
+            return 1;
+        }
+        printf("[info] ZKP proof length: %zu bytes\n", proof_written);
+        //print_end_stats("zkp_generate_proof", &base);
+        if (strcmp(mode, "zkp") == 0) return 0;
+    }
+
+    // TFHE: encrypt an AES-128 key under a TFHE public key
+    printf("[info] TFHE params: TRLWE_N=%u\n", (unsigned)TFHE_TRLWE_N);
+    const uint8_t aes_key[AES_KEY_LEN] = {
+        0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,
+        0x08,0x09,0x0a,0x0b,0x0c,0x0d,0x0e,0x0f
+    };
+
+    printf("[info] AES-128 key: ");
+    for (int i = 0; i < 16; i++) printf("%02x", aes_key[i]);
+    printf("\n");
+
+    // Demo public key arrays. Replace with a real PK.
+    uint64_t pk_a[TFHE_TRLWE_N];
+    uint64_t pk_b[TFHE_TRLWE_N];
+    for (uint32_t i = 0; i < TFHE_TRLWE_N; i++) { pk_a[i] = 1ULL; pk_b[i] = 1ULL; }
+    printf("[info] PK a[0..7]: ");
+    for (int i = 0; i < 8 && i < (int)TFHE_TRLWE_N; i++) printf("%llu ", (unsigned long long)pk_a[i]);
+    printf("\n[info] PK b[0..7]: ");
+    for (int i = 0; i < 8 && i < (int)TFHE_TRLWE_N; i++) printf("%llu ", (unsigned long long)pk_b[i]);
+    printf("\n");
+
+    if (strcmp(mode, "tfhe") == 0 || strcmp(mode, "both") == 0) {
+        // Pack the public key into an opaque buffer
+        printf("[info] Packing TFHE PK...\n");
+        unsigned char pk_buf[1<<18];
+        size_t pk_len = 0;
+B_START
+        rc = tfhe_pack_public_key(pk_a, pk_b, pk_buf, sizeof pk_buf, &pk_len);
+B_SP("tfhe_pack_public_key()")
+        if (rc != BATTERY_OK) {
+            fprintf(stderr, "tfhe_pack_public_key failed: %s (%d)\n", battery_strerror(rc), rc);
+            return 1;
+        }
+
+        // Output ciphertext and fixed RNG seed
+        unsigned char ct_buf[1<<19];
+        size_t ct_written = 0;
+        uint8_t seed[BATTERY_SEED_LEN];
+        memset(seed, 42, sizeof(seed));
+        printf("[info] Seed (first 8 bytes): ");
+        for (int i = 0; i < 8; i++) printf("%02x", seed[i]);
+        printf("..\n");
+
+        // Baseline before TFHE encrypt
+        //memsnap_t base; read_memsnap(&base);
+        printf("[info] Encrypting AES key with TFHE PK...\n");
+B_START
+        rc = tfhe_pk_encrypt_aes_key(pk_buf, pk_len, aes_key, seed, BATTERY_SEED_LEN,
+                                     ct_buf, sizeof ct_buf, &ct_written);
+B_SP("tfhe_pk_encrypt_aes_key()")
+        if (rc != BATTERY_OK) {
+            fprintf(stderr, "tfhe_pk_encrypt_aes_key failed: %s (%d)\n", battery_strerror(rc), rc);
+            return 1;
+        }
+        printf("[info] CT (postcard) length: %zu bytes\n", ct_written);
+        //print_end_stats("tfhe_pk_encrypt", &base);
+        if (strcmp(mode, "tfhe") == 0) return 0;
+    }
+
+    // E2E: encrypt some demo data under AES-128-CTR using the plaintext AES key
+    uint8_t data[64];
+    for (int i = 0; i < 64; i++) data[i] = (uint8_t)i; // demo data 0..63
+    uint8_t iv[16];
+    memset(iv, 0x23, sizeof iv); // demo IV (non-random) — replace in production
+    printf("[info] AES-CTR IV: ");
+    for (int i = 0; i < 16; i++) printf("%02x", iv[i]);
+    printf("\n[info] AES-CTR plaintext[0..15]: ");
+    for (int i = 0; i < 16; i++) printf("%02x", data[i]);
+    printf("\n[info] Encrypting with AES-CTR...\n");
+B_START
+    if (aes_ctr_encrypt(data, sizeof(data), aes_key, AES_KEY_LEN, iv, AES_IV_LEN) != BATTERY_OK) {
+        fprintf(stderr, "aes_ctr_encrypt failed\n");
+        return 1;
+    }
+B_SP("aes_ctr_encrypt()")
+    // No memory print here; AES is usually negligible vs ZKP/TFHE
+    printf("[info] AES-CTR ciphertext[0..15]: ");
+    for (int i = 0; i < 16; i++) printf("%02x", data[i]);
+    printf("\n");
+
+    return 0;
+}
+
