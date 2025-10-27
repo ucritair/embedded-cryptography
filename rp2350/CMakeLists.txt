@@ -10,6 +10,13 @@ pico_sdk_init()
 
 # rest of your project
 
+# XXX: horrible kludge to fix the pico-sdk hard coding -mfloat-abi=softfp (pico-sdk/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake)
+#	we need to change from "softfp" to "hard" to be compatible with the rust compiler settings for the rp2350 platform
+
+string(REPLACE "-mfloat-abi=softfp" "-mfloat-abi=hard" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+string(REPLACE "-mfloat-abi=softfp" "-mfloat-abi=hard" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
+string(REPLACE "-mfloat-abi=softfp" "-mfloat-abi=hard" CMAKE_ASM_FLAGS ${CMAKE_ASM_FLAGS})
+
 
 add_executable(test
 	test.c
