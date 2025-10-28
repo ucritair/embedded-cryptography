@@ -6,12 +6,20 @@ add_executable(pico_project
     main.c
     tf_port.c
     ipc.c
+
+    # Crypto Ops
+    battery_e2e.c
 )
 
-target_include_directories(pico_project PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(pico_project PUBLIC 
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/../
+)
 
 # pull in common dependencies
-target_link_libraries(pico_project pico_stdlib tinyframe pico_cyw43_arch_lwip_poll pico_lwip)
+target_link_libraries(pico_project pico_stdlib tinyframe pico_cyw43_arch_lwip_poll pico_lwip pico_multicore
+    ${CMAKE_SOURCE_DIR}/../target/thumbv8m.main-none-eabihf/release/libbattery_embedded.a
+)
 
 # enable usb output, disable uart output
 pico_enable_stdio_usb(pico_project 1)

@@ -1,5 +1,16 @@
 #!/bin/bash
 
+# 1. Build the Rust crypto library first
+(cd ../ && \
+    cargo build --target=thumbv8m.main-none-eabihf --no-default-features --features "ffi, alloc" --release)
+
+# Exit if the rust build failed
+if [ $? -ne 0 ]; then
+    echo "Rust build failed. Exiting."
+    exit 1
+fi
+
+
 # Pico2 WiFi TCP Client Build Script
 # Edit these values for your network:
 WIFI_SSID="Zaviyar-Home-2G"

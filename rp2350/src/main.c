@@ -117,12 +117,85 @@ TF_Result sensor_data_listener(TinyFrame *tf, TF_Msg *msg)
     return TF_STAY;
 }
 
+#include "hardware/xip_cache.h"
+#include "hardware/regs/addressmap.h"
+#include "hardware/regs/qmi.h"
+#include "hardware/regs/xip.h"
+#include "hardware/structs/xip_ctrl.h"
+#include "hardware/structs/qmi.h"
+#include "hardware/structs/xip_ctrl.h"
+
+#include "pico/multicore.h"
+
+// Base address of the PSRAM/Flash mapped in XIP (cached)
+// 0x15000000 for uncached
+#define PSRAM_BASE_ADDRESS   0x11000000
+#define UCPSRAM_BASE_ADDRESS 0x15000000
+
+// Size of the PSRAM (8 MB = 8 * 1024 * 1024 bytes)
+#define PSRAM_SIZE_BYTES (8 * 1024 * 1024)
+
+
+// last address of PSRAM
+#define PSRAM_TOP (PSRAM_BASE_ADDRESS + (PSRAM_SIZE_BYTES - 1))
+
+
+// PSRA alternate stack size (1MB)
+#define PSRAM_STACK_SIZE (1 * 1024 * 1024)
+
+// PSRAM alternate stack bottom address
+#define PSRAM_STACK_BOT (PSRAM_TOP + 1) - PSRAM_STACK_SIZE
+
+// RP2350B pin 58 is GPIO 47
+// GPIO 47 as CS
+#define PSRAM_CS_PIN 47
+
+uint8_t* psram = (uint8_t*)PSRAM_BASE_ADDRESS;
+uint8_t* uc_psram = (uint8_t*)UCPSRAM_BASE_ADDRESS;
+
+void init_psram()
+{
+	gpio_set_function(PSRAM_CS_PIN, GPIO_FUNC_XIP_CS1); // Set GPIO 47 as CS pin
+	xip_ctrl_hw->ctrl |= XIP_CTRL_WRITABLE_M1_BITS;     // Configure XIP controller for writable M1 region
+}
+
+void core1_battery_e2e ()
+{
+	battery_e2e();
+
+	printf(">>> CORE1 DONE, SPINNING <<<\n");
+	while ( true )
+	{
+		sleep_ms(1000);
+	}
+}
+
+void do_crypto_ops(void) {
+	printf("Doing Crypto on Core 1. [PSRAM_STACK_BOT: 0x%x] [PSRAM_STACK_SIZE: 0x%x]...\n", PSRAM_STACK_BOT, PSRAM_STACK_SIZE);
+	multicore_reset_core1();
+
+	// FIXME: we are only doing this to quickly change the stack location to PSRAM
+	//	instead implement a stack pointer and restore so this can be run on core0 and free up core1
+	multicore_launch_core1_with_stack(core1_battery_e2e, (uint32_t *)PSRAM_STACK_BOT, PSRAM_STACK_SIZE);
+}
 
 int main() {
     stdio_init_all();
     tf_port_init();
 
     printf("Hello, Pico!\n");
+
+    // Add a delay to allow for UART connection
+    for (int i = 0; i < 5; i++) {
+        printf("Waiting for UART...\n");
+        sleep_ms(1000);
+    }
+ 
+    printf("Querying Rust library version...\n");
+    printf("battery_api_version(): 0x%X\n", battery_api_version());
+
+    init_psram();
+    griffon_heap_init(PSRAM_BASE_ADDRESS, PSRAM_SIZE_BYTES);
 
     if (cyw43_arch_init()) {
         printf("failed to initialise cyw43_arch\n");
@@ -138,6 +211,7 @@ int main() {
     TF_AddTypeListener(tf, MSG_TYPE_SET_WIFI_CREDENTIALS, set_wifi_credentials_listener);
     TF_AddTypeListener(tf, MSG_TYPE_SENSOR_DATA, sensor_data_listener);
 
+    int i = 0;
     while (true) {
         // TinyFrame processing
         while (uart_is_readable(uart0)) {
@@ -157,6 +231,12 @@ int main() {
             case APP_STATE_WIFI_CONNECTED:
                 // no-op for now..
                 break;
+        }
+
+        if (i == 0) {
+            printf("Running Crypto Test \n");
+            do_crypto_ops();
+            i = 1;
         }
     }
 
