@@ -9,6 +9,7 @@ extern crate alloc;
 use embedded_alloc::LlffHeap as Heap;
 
 // griffon
+// adding a GPIO so we can show error state from the rust code (LED)
 use rp235x_hal as _;
 
 use embedded_hal::digital::{OutputPin};
@@ -55,6 +56,7 @@ fn gpio_init()
 #[cfg(not(feature = "std"))]
 #[panic_handler]
 fn panic_handler(_: &core::panic::PanicInfo) -> ! {
+    // set board LED to indicate we entered the rust panic_handler
     gpio_init();
     loop {}
 }

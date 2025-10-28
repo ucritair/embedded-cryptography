@@ -20,7 +20,7 @@ string(REPLACE "-mfloat-abi=softfp" "-mfloat-abi=hard" CMAKE_ASM_FLAGS ${CMAKE_A
 
 add_executable(test
 	test.c
-#	battery_e2e.c
+	battery_e2e.c
 )
 
 target_compile_definitions(test PUBLIC
