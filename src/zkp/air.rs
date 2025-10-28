@@ -85,11 +85,12 @@ impl<
         &self,
         leaf: &[F; HASH_SIZE],
         neighbors: &[([F; HASH_SIZE], bool)],
+        nonce: &[F; HASH_SIZE],
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
-        let rows = neighbors.len();
+        let rows = neighbors.len() + 1;
         assert!(
-            rows > 0 && !neighbors[0].1,
+            rows > 1 && !neighbors[0].1,
             "neighbors[0].1 must be false to ensure uniqueness of proof"
         );
         let cols = self.width();
@@ -99,15 +100,20 @@ impl<
         for row_num in 0..rows {
             let row_offset = row_num * cols;
             let (pvs, current) = vec.split_at_mut(row_offset);
-            current[..HASH_SIZE].copy_from_slice(&neighbors[row_num].0);
-            let second_input = if row_num == 0 {
+            let first_input = if row_num == 0 {
+                nonce
+            } else {
+                &neighbors[row_num - 1].0
+            };
+            current[..HASH_SIZE].copy_from_slice(first_input);
+            let second_input = if row_num <= 1 {
                 leaf
             } else {
                 &pvs[pvs.len() - WIDTH..pvs.len() - WIDTH + HASH_SIZE]
             };
             current[HASH_SIZE..HASH_SIZE_2].copy_from_slice(second_input);
             let mut state = [F::ZERO; WIDTH];
-            current[HASH_SIZE_2] = if neighbors[row_num].1 {
+            current[HASH_SIZE_2] = if row_num > 0 && neighbors[row_num - 1].1 {
                 state[0..HASH_SIZE_2].copy_from_slice(&current[0..HASH_SIZE_2]);
                 F::ONE
             } else {
@@ -132,6 +138,10 @@ impl<
                 HALF_FULL_ROUNDS,
                 PARTIAL_ROUNDS,
             >(hash_slice_maybe_uninit.borrow_mut(), state, &self.constants);
+            // For some reason, Poseidon2Cols has an `export` field that is always
+            // set to 1 by the generator and ignored by the eval.  We instead use
+            // this field for the row number.
+            hash_slice[0] = F::from_int(row_num);
         }
         RowMajorMatrix::new(vec, cols)
     }
@@ -159,16 +169,24 @@ impl<
         let local = main.row_slice(0).unwrap();
         let next = main.row_slice(1).unwrap();
         let (inputs, hash) = local.split_at(HASH_OFFSET);
-        builder.assert_one(hash[0]);
+        // We need a selector for "transition but not first row".
+        // For some reason, builder.first_row() is not 1 in the first row,
+        // so using 1 - builder.first_row() won't work.
+        // Instead, we store the row number in local[HASH_OFFSET] = hash[0].
+        builder.when_first_row().assert_zero(hash[0]);
+        builder
+            .when_transition()
+            .assert_one(next[HASH_OFFSET] - hash[0]);
         let selector = inputs[HASH_SIZE_2];
-        let one_minus_selector = hash[0] - selector;
+        let one_minus_selector = AB::Expr::from(AB::F::ONE) - selector;
         builder.assert_zero(selector * one_minus_selector);
         // Force the first selector to be zero; otherwise it's easy to construct 2 valid proofs
         builder.when_first_row().assert_zero(selector);
+        builder.when_first_row().assert_zero(next[HASH_SIZE_2]);
+        let transition_not_first_row = builder.is_transition() * hash[0];
         for i in 0..HASH_SIZE {
             // The offset of 1 is due to the `export` field in `Poseidon2Cols`.
-            // The `eval_poseidon2` function does not seem to care about it.
-            // The generator always fills this field with 1.
+            // We are using it to store the row number.
             let left = (inputs[i] - inputs[i + HASH_SIZE]) * selector + inputs[i + HASH_SIZE];
             builder.assert_eq(hash[i + 1], left);
             builder.assert_eq(
@@ -176,7 +194,7 @@ impl<
                 hash[i + 1] + hash[i + HASH_SIZE + 1],
             );
             builder
-                .when_transition()
+                .when(transition_not_first_row.clone())
                 .assert_eq(hash[hash.len() - WIDTH + i], next[i + HASH_SIZE]);
         }
         for i in HASH_SIZE_2..WIDTH {
@@ -184,6 +202,16 @@ impl<
         }
         eval_poseidon2(self, builder, hash.borrow());
         let public_values = builder.public_values().to_vec();
+        for i in 0..HASH_SIZE {
+            builder
+                .when_first_row()
+                .assert_eq(inputs[i], public_values[HASH_SIZE + i]);
+            builder.when_first_row().assert_eq(
+                hash[hash.len() - WIDTH + i],
+                public_values[2 * HASH_SIZE + i],
+            );
+        }
+        // Bind last-row output to PV[0..HASH_SIZE] = Merkle root.
         for i in 0..HASH_SIZE {
             builder
                 .when_last_row()

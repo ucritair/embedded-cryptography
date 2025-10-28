@@ -17,7 +17,6 @@ use rp235x_hal::{
 };
 
 pub mod aes_ctr;
-pub mod poly;
 pub mod tfhe;
 
 #[cfg(any(feature = "std", feature = "alloc"))]
