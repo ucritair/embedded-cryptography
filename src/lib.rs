@@ -17,6 +17,11 @@ use rp235x_hal::{
     self as hal, gpio::Pins, Sio,
 };
 
+// griffon
+// allow using puts() from the C pico-sdk
+pub mod debug_ffi;
+
+
 pub mod aes_ctr;
 pub mod tfhe;
 

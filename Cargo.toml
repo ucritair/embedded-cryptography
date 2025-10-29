@@ -57,6 +57,8 @@ postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde-big-array = "0.5"
 embedded-hal = "1.0.0"
+# for C debug puts()
+cstr_core = "0.2.6"
 
 [build-dependencies]
 cbindgen = "0.29"

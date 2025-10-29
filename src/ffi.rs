@@ -7,6 +7,10 @@ use p3_field::integers::QuotientMap;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
+// griffon: allow using puts() from the C pico-sdk
+use crate::debug_ffi::dbg_puts;
+
+
 // Public constants for FFI
 pub const TFHE_TRLWE_N: usize = 1024;
 const Q: u64 = 1 << 50;
@@ -31,6 +35,8 @@ pub const BATTERY_API_VERSION: u32 = 1;
 pub extern "C" fn battery_api_version() -> u32 {
     BATTERY_API_VERSION
 }
+
+
 
 // ------------- TFHE -------------
 
@@ -157,7 +163,7 @@ struct OpaqueMerklePathArgs {
 /// - `proof_out`/`proof_out_len`: caller-provided buffer for postcard-serialized bundle:
 ///   (proof, public_values) where public_values = [root(8) | nonce_field(8) | hash(nonce||leaf)(8)].
 /// - `out_proof_written`: number of bytes written. If too small, returns `BATTERY_ERR_BUFSZ`.
-///
+//
 /// Serialization: postcard 1.x (stable).
 #[unsafe(no_mangle)]
 pub extern "C" fn zkp_generate_proof(
@@ -168,6 +174,7 @@ pub extern "C" fn zkp_generate_proof(
     proof_out_len: usize,
     out_proof_written: *mut usize,
 ) -> i32 {
+dbg_puts("RUST: 0");
     if args.is_null() || nonce32.is_null() || proof_out.is_null() || out_proof_written.is_null() {
         return BATTERY_ERR_NULL;
     }
@@ -197,6 +204,7 @@ pub extern "C" fn zkp_generate_proof(
         }
     }
     let mut neighbors: Vec<([Val; 8], bool)> = Vec::with_capacity(levels);
+dbg_puts("RUST: 1");
     for (lvl, neigh) in args.neighbors8_by_level_u32.iter().enumerate() {
         let mut arr = [Val::from_canonical_checked(0).unwrap(); 8];
         for j in 0..8 {
@@ -215,13 +223,16 @@ pub extern "C" fn zkp_generate_proof(
     if neighbors[0].1 {
         return BATTERY_ERR_INPUT;
     }
+dbg_puts("RUST: 10");
     let (proof, public_values) = zkp::generate_proof(&leaf, &neighbors, &nonce_arr);
     // Public values layout is fixed at 24 = 3 * HASH_SIZE elements:
     //   [root(8) | nonce_field(8) | hash(nonce||leaf)(8)].
     if public_values.len() != 3 * zkp::HASH_SIZE {
         return BATTERY_ERR_INPUT;
     }
+dbg_puts("RUST: 20");
     let bundle = ZkpProofBundle(proof, public_values);
+dbg_puts("RUST: 30");
     let out_bytes = unsafe { core::slice::from_raw_parts_mut(proof_out, proof_out_len) };
     match postcard::to_slice(&bundle, out_bytes) {
         Ok(rem) => {

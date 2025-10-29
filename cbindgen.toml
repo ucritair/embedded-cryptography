@@ -39,4 +39,5 @@ include = [
 exclude = [
   "tfhe_pk_encrypt_aes_key_legacy",
   "zkp_generate_proof_legacy",
+  "puts",
 ]

@@ -78,6 +78,10 @@ B_SP("zkp_pack_args()")
         //memsnap_t base; read_memsnap(&base);
         unsigned char proof_buf[1<<19]; // 0.5 MiB demo buffer
         size_t proof_written = 0;
+
+	printf("zkp_generate_proof(): args_len: %zu\n", args_len);
+	printf("zkp_generate_proof(): proof_buf: %zu\n", sizeof(proof_buf));
+
 B_START
 	// zkp_generate_proof returns a postcard-serialized bundle: (proof, public_values)
         rc = zkp_generate_proof(args_buf,
