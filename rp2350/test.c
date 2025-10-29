@@ -24,6 +24,10 @@
 #include "include/battery.h"
 #include "include/battery_helpers.h"
 
+// for clock_get_hz()
+#include "hardware/clocks.h"
+
+
 
 // Base address of the PSRAM/Flash mapped in XIP (cached)
 // 0x15000000 for uncached
@@ -122,6 +126,20 @@ int main ()
 	}
 
 	printf("\n");
+
+	printf("[CLOCKS]\n");
+	printf("========================================\n");
+	printf("CLK_GPOUT0: %u\n", clock_get_hz(clk_gpout0));
+	printf("CLK_GPOUT1: %u\n", clock_get_hz(clk_gpout1));
+	printf("CLK_GPOUT2: %u\n", clock_get_hz(clk_gpout2));
+	printf("CLK_GPOUT3: %u\n", clock_get_hz(clk_gpout3));
+	printf("   CLK_REF: %u\n", clock_get_hz(clk_ref));
+	printf("   CLK_SYS: %u\n", clock_get_hz(clk_sys));
+	printf("  CLK_PERI: %u\n", clock_get_hz(clk_peri));
+	printf("  CLK_HSTX: %u\n", clock_get_hz(clk_hstx));
+	printf("   CLK_USB: %u\n", clock_get_hz(clk_usb));
+	printf("   CLK_ADC: %u\n", clock_get_hz(clk_adc));
+	printf("========================================\n");
 
 	printf("battery_api_version(): 0x%X\n", battery_api_version());
 
