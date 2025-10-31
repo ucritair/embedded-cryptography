@@ -14,6 +14,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+#include "httpss_client.h"
+
 // Global variables for WiFi credentials
 static char wifi_ssid[MAX_SSID_LEN + 1];
 static char wifi_password[MAX_PASSWORD_LEN + 1];
@@ -57,6 +59,7 @@ static TinyFrame *tf;
 TF_Result firmware_version_listener(TinyFrame *tf, TF_Msg *msg)
 {
     printf("Received firmware version query.\n");
+    https_download_signature();
     static msg_payload_version_response_t response;
     response.version = (FIRMWARE_VERSION_MAJOR << 24) | (FIRMWARE_VERSION_MINOR << 16) | FIRMWARE_VERSION_PATCH;
 
