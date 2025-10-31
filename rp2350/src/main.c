@@ -11,6 +11,9 @@
 #include "lwip/tcp.h"
 #include "lwip/netif.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 // Global variables for WiFi credentials
 static char wifi_ssid[MAX_SSID_LEN + 1];
 static char wifi_password[MAX_PASSWORD_LEN + 1];
@@ -24,6 +27,14 @@ typedef enum {
 } app_state_t;
 
 static app_state_t app_state = APP_STATE_WAIT_CREDENTIALS;
+
+// Task priorities
+#define MAIN_TASK_PRIORITY      ( tskIDLE_PRIORITY + 1UL )
+#define CRYPTO_TASK_PRIORITY    ( tskIDLE_PRIORITY + 2UL )
+
+// Task stack sizes
+#define MAIN_TASK_STACK_SIZE 1024
+#define CRYPTO_TASK_STACK_SIZE 2048
 
 static bool connect_to_wifi(void)
 {
@@ -183,7 +194,7 @@ void do_crypto_ops(void) {
 	multicore_launch_core1_with_stack(core1_battery_e2e, (uint32_t *)PSRAM_STACK_BOT, PSRAM_STACK_SIZE);
 }
 
-int main() {
+void main_task(__unused void *params) {
     stdio_init_all();
     tf_port_init();
 
@@ -192,7 +203,7 @@ int main() {
     // Add a delay to allow for UART connection
     for (int i = 0; i < 5; i++) {
         printf("Waiting for UART...\n");
-        sleep_ms(1000);
+        vTaskDelay(1000);
     }
  
     printf("Querying Rust library version...\n");
@@ -203,7 +214,7 @@ int main() {
 
     if (cyw43_arch_init()) {
         printf("failed to initialise cyw43_arch\n");
-        return 1;
+        return;
     }
 
     cyw43_arch_enable_sta_mode();
@@ -242,8 +253,14 @@ int main() {
             do_crypto_ops();
             i = 1;
         }
+        vTaskDelay(1);
     }
+}
 
-    cyw43_arch_deinit(); // De-initialize CYW43 on exit
+int main(void) {
+    // Start the main thread
+    xTaskCreate(main_task, "MainThread", MAIN_TASK_STACK_SIZE, NULL, MAIN_TASK_PRIORITY, NULL);
+    vTaskStartScheduler();
+
     return 0;
 }

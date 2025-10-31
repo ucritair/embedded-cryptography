@@ -6,6 +6,8 @@ set(PICO_SDK_PATH ${CMAKE_CURRENT_SOURCE_DIR}/pico-sdk)
 # Pull in SDK (must be before project)
 include(${PICO_SDK_PATH}/pico_sdk_init.cmake)
 
+include(FreeRTOS_Kernel_import.cmake)
+
 project(pico_top_level_project C CXX ASM)
 
 # initialize the Raspberry Pi Pico SDK
