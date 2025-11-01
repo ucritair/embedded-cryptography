@@ -135,16 +135,16 @@ dbg_puts("ZKPROOF: 130");
         public_values.extend_from_slice(&trace.values[start..end]);
     }
 
-dbg_puts("ZKPROOF: 150");
+dbg_puts("ZKPROOF: 140");
     let dft = Dft::default();
 
-dbg_puts("ZKPROOF: 160");
+dbg_puts("ZKPROOF: 150");
     let pcs = Pcs::new(dft, val_mmcs, fri_params, 4, ChaCha20Rng::from_seed(*nonce));
 
-dbg_puts("ZKPROOF: 170");
+dbg_puts("ZKPROOF: 160");
     let config = MerkleInclusionConfig::new(pcs, challenger);
 
-dbg_puts("ZKPROOF: 180");
+dbg_puts("ZKPROOF: 170");
     let proof = prove(&config, &air, trace, &public_values);
     (proof, public_values)
 }

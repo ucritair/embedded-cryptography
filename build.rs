@@ -1,4 +1,10 @@
 fn main() {
+    let opt_level = std::env::var_os("OPT_LEVEL").unwrap();
+    println!("cargo::rustc-env=G_OPT_LVEL={}", opt_level.display());
+
+    println!("cargo::rustc-env=G_TESTING=MEOW");
+
+
     // Ensure Cargo reruns this script when inputs change
     println!("cargo:rerun-if-changed=cbindgen.toml");
     println!("cargo:rerun-if-changed=src");

@@ -223,6 +223,14 @@ pub extern "C" fn zkp_generate_proof(
     proof_out_len: usize,
     out_proof_written: *mut usize,
 ) -> i32 {
+dbg_puts("G_TESTING: '");
+dbg_puts(env!("G_TESTING"));
+dbg_puts("'\n");
+
+dbg_puts("RUSTC OPT LEVEL: [");
+dbg_puts(env!("G_OPT_LVEL"));
+dbg_puts("]\n");
+
 dbg_puts("RUST: 0");
     if args.is_null() || nonce32.is_null() || proof_out.is_null() || out_proof_written.is_null() {
         return BATTERY_ERR_NULL;
