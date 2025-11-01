@@ -19,7 +19,7 @@ use constants::RoundConstants;
 use super::Vec;
 
 // griffon: allow using puts() from the C pico-sdk
-use crate::debug_ffi::dbg_puts;
+//use crate::debug_ffi::dbg_puts;
 
 
 pub mod air;
@@ -81,32 +81,32 @@ pub fn generate_proof(
     neighbors: &[([Val; 8], bool)],
     nonce: &[u8; 32],
 ) -> (MerkleInclusionProof, Vec<Val>) {
-dbg_puts("ZKPROOF: 10");
+//dbg_puts("ZKPROOF: 10");
     let byte_hash = ByteHash {};
 
-dbg_puts("ZKPROOF: 20");
+//dbg_puts("ZKPROOF: 20");
     let u64_hash = U64Hash::new(KeccakF {});
 
-dbg_puts("ZKPROOF: 30");
+//dbg_puts("ZKPROOF: 30");
     let field_hash = FieldHash::new(u64_hash);
 
-dbg_puts("ZKPROOF: 40");
+//dbg_puts("ZKPROOF: 40");
     let compress = MyCompress::new(u64_hash);
 
-dbg_puts("ZKPROOF: 50");
+//dbg_puts("ZKPROOF: 50");
     let mut rng = ChaCha20Rng::seed_from_u64(1);
-dbg_puts("ZKPROOF: 60");
+//dbg_puts("ZKPROOF: 60");
     let constants = RoundConstants::from_rng(&mut rng);
-dbg_puts("ZKPROOF: 70");
+//dbg_puts("ZKPROOF: 70");
     let val_mmcs = ValMmcs::new(field_hash, compress, rng);
 
-dbg_puts("ZKPROOF: 80");
+//dbg_puts("ZKPROOF: 80");
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
-dbg_puts("ZKPROOF: 90");
+//dbg_puts("ZKPROOF: 90");
     let challenger = Challenger::from_hasher(nonce.to_vec(), byte_hash);
 
-dbg_puts("ZKPROOF: 100");
+//dbg_puts("ZKPROOF: 100");
     let air = MerkleInclusionAir::<
         Val,
         PoseidonLayers,
@@ -116,14 +116,14 @@ dbg_puts("ZKPROOF: 100");
         PARTIAL_ROUNDS,
     >::new(constants);
 
-dbg_puts("ZKPROOF: 110");
+//dbg_puts("ZKPROOF: 110");
     let fri_params = create_benchmark_fri_params_zk(challenge_mmcs);
 
-dbg_puts("ZKPROOF: 120");
+//dbg_puts("ZKPROOF: 120");
     let nonce_field = nonce_field_rep(nonce);
     // Sanity: neighbors.len() + 1 must be power-of-two for the radix-2 FFTs
     debug_assert!((neighbors.len() + 1).is_power_of_two());
-dbg_puts("ZKPROOF: 130");
+//dbg_puts("ZKPROOF: 130");
     let trace = air.generate_trace_rows(leaf, neighbors, &nonce_field);
     let mut public_values: Vec<Val> = Vec::with_capacity(3 * HASH_SIZE);
     {
@@ -135,16 +135,16 @@ dbg_puts("ZKPROOF: 130");
         public_values.extend_from_slice(&trace.values[start..end]);
     }
 
-dbg_puts("ZKPROOF: 140");
+//dbg_puts("ZKPROOF: 140");
     let dft = Dft::default();
 
-dbg_puts("ZKPROOF: 150");
+//dbg_puts("ZKPROOF: 150");
     let pcs = Pcs::new(dft, val_mmcs, fri_params, 4, ChaCha20Rng::from_seed(*nonce));
 
-dbg_puts("ZKPROOF: 160");
+//dbg_puts("ZKPROOF: 160");
     let config = MerkleInclusionConfig::new(pcs, challenger);
 
-dbg_puts("ZKPROOF: 170");
+//dbg_puts("ZKPROOF: 170");
     let proof = prove(&config, &air, trace, &public_values);
     (proof, public_values)
 }

@@ -18,8 +18,8 @@ alloc = ["dep:embedded-alloc"] # for no_std + alloc -> bring in embedded-alloc
 ffi = ["alloc"]          # C FFI bindings
 
 [profile.release]
-# best level (2 also did very well)
-opt-level = 's'
+# currently fastest level found (EXTREMELY VOLATILE BETWEEN BUILDS)
+opt-level = 2
 #opt-level = 3
 lto = "thin"
 codegen-units = 1

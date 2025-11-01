@@ -10,7 +10,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
 // griffon: allow using puts() from the C pico-sdk
-use crate::debug_ffi::dbg_puts;
+//use crate::debug_ffi::dbg_puts;
 
 
 // Public constants for FFI
@@ -223,15 +223,15 @@ pub extern "C" fn zkp_generate_proof(
     proof_out_len: usize,
     out_proof_written: *mut usize,
 ) -> i32 {
-dbg_puts("G_TESTING: '");
-dbg_puts(env!("G_TESTING"));
-dbg_puts("'\n");
+//dbg_puts("G_TESTING: '");
+//dbg_puts(env!("G_TESTING"));
+//dbg_puts("'\n");
 
-dbg_puts("RUSTC OPT LEVEL: [");
-dbg_puts(env!("G_OPT_LVEL"));
-dbg_puts("]\n");
+//dbg_puts("RUSTC OPT LEVEL: [");
+//dbg_puts(env!("G_OPT_LVEL"));
+//dbg_puts("]\n");
 
-dbg_puts("RUST: 0");
+//dbg_puts("RUST: 0");
     if args.is_null() || nonce32.is_null() || proof_out.is_null() || out_proof_written.is_null() {
         return BATTERY_ERR_NULL;
     }
@@ -261,7 +261,7 @@ dbg_puts("RUST: 0");
         }
     }
     let mut neighbors: Vec<([Val; 8], bool)> = Vec::with_capacity(levels);
-dbg_puts("RUST: 1");
+//dbg_puts("RUST: 1");
     for (lvl, neigh) in args.neighbors8_by_level_u32.iter().enumerate() {
         let mut arr = [Val::from_canonical_checked(0).unwrap(); 8];
         for j in 0..8 {
@@ -280,16 +280,16 @@ dbg_puts("RUST: 1");
     if neighbors[0].1 {
         return BATTERY_ERR_INPUT;
     }
-dbg_puts("RUST: 10");
+//dbg_puts("RUST: 10");
     let (proof, public_values) = zkp::generate_proof(&leaf, &neighbors, &nonce_arr);
     // Public values layout is fixed at 24 = 3 * HASH_SIZE elements:
     //   [root(8) | nonce_field(8) | hash(leaf||nonce)(8)].
     if public_values.len() != 3 * zkp::HASH_SIZE {
         return BATTERY_ERR_INPUT;
     }
-dbg_puts("RUST: 20");
+//dbg_puts("RUST: 20");
     let bundle = ZkpProofBundle(proof, public_values);
-dbg_puts("RUST: 30");
+//dbg_puts("RUST: 30");
     let out_bytes = unsafe { core::slice::from_raw_parts_mut(proof_out, proof_out_len) };
     match postcard::to_slice(&bundle, out_bytes) {
         Ok(rem) => {

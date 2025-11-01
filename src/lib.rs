@@ -19,7 +19,7 @@ use rp235x_hal::{
 
 // griffon
 // allow using puts() from the C pico-sdk
-pub mod debug_ffi;
+//pub mod debug_ffi;
 
 
 pub mod aes_ctr;
