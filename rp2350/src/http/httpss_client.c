@@ -4,8 +4,6 @@
 
 #include "lwip/netif.h"
 
-#include "FreeRTOS.h"
-#include "task.h"
 #include "http_client_util.h"
 
 // Using this url as we know the root cert won't change for a long time
@@ -33,7 +31,7 @@ PC3wSPqJ1byJKA6D+ZyjKR1aORbiDQVEpDNWRKiQ5QapLg8wbcED0MrRKQIxAKUT\n\
 v8TJkb/8jC/oBVTmczKlPMkciN+uiaZSXahgYKyYhvKTatCTZb+geSIhc0w/2w==\n\
 -----END CERTIFICATE-----\n"
 
-static void https_download_task(__unused void *params) {
+void https_download_signature(void) {
     static const uint8_t cert_ok[] = TLS_ROOT_CERT_OK;
     static EXAMPLE_HTTP_REQUEST_T req = {0};
     req.hostname = HOST;
@@ -49,10 +47,4 @@ static void https_download_task(__unused void *params) {
     } else {
         printf("HTTPS download successful\n");
     }
-
-    vTaskDelete(NULL);
-}
-
-void https_download_signature(void) {
-    xTaskCreate(https_download_task, "HTTPSDownloadThread", 2048, NULL, tskIDLE_PRIORITY + 3, NULL);
 }
