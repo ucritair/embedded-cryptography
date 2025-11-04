@@ -27,6 +27,10 @@ strip = true
 incremental = false
 panic = "abort"
 
+[profile.dev]
+# no_std builds require aborting panics; match release profile
+panic = "abort"
+
 [dependencies]
 # If you're not going to use a Board Support Package you'll need these:
 rp235x-hal = { version = "0.3", features = [

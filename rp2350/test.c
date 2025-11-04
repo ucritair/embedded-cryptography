@@ -210,7 +210,7 @@ int main ()
 	printf("rust heap init... ");
 
 	/// !!! FIXME: subtract stack at the top of PSRAM !!!
-	griffon_heap_init(PSRAM_BASE_ADDRESS, PSRAM_SIZE_BYTES);
+	rust_heap_init(PSRAM_BASE_ADDRESS, PSRAM_SIZE_BYTES);
 
 	printf("ok\n");
 

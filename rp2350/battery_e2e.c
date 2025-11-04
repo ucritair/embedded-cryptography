@@ -13,7 +13,7 @@
 #include "pico/stdlib.h"
 
 // benchmarking
-#define B_USE printf("+++ HEAP USE: %lu\n", griffon_heap_used());
+#define B_USE printf("+++ HEAP USE: %lu\n", rust_heap_used());
 
 #define B_START bench_start = time_us_64();
 #define B_STOP  bench_stop = time_us_64() - bench_start;
@@ -34,16 +34,16 @@ B_USE
 
     printf("MODE: %s\n", mode);
 
+    // ZKP: device knows both leaves; server supplies parent→root path.
+    // rows = levels(parent→root) + 2 must be a power of two.
+    // For a depth-32 demo: parent→root levels = 30 -> rows = 32.
+    enum { LEVELS = 30 }; // parent→root
+    uint32_t secret16_u32[16]; // [leaf(8) | sibling(8)]
 
-    // ZKP: generate public values (e.g., Merkle root)  and zk proof for a provided leaf & path
-    // Use a compile-time constant to avoid VLA warnings
-    // The ZKP trace adds an initial row for hash(nonce||leaf),
-    // so `levels + 1` must be a power of two. For a depth-32 demo, pass 31 here.
-    enum { LEVELS = 31 }; // demo depth -> rows = 32
-    uint32_t leaf8_u32[8];
     uint32_t neighbors8_by_level_u32[LEVELS * 8];
     uint8_t sides[LEVELS];
-    for (int i = 0; i < 8; i++) leaf8_u32[i] = 4; // demo leaf values
+    for (int i = 0; i < 8; i++) secret16_u32[i] = 4;      // device leaf
+    for (int i = 0; i < 8; i++) secret16_u32[8 + i] = 3;  // sibling
     for (size_t l = 0; l < LEVELS; l++) {
         for (int j = 0; j < 8; j++) neighbors8_by_level_u32[l*8 + j] = 3; // demo neighbors
         sides[l] = 0; // 0 = right, non-zero = left; require sides[0] == 0
@@ -59,8 +59,7 @@ B_USE
     unsigned char args_buf[1<<16];
     size_t args_len = 0;
 B_START
-    int rc = zkp_pack_args(leaf8_u32,
-                           neighbors8_by_level_u32,
+    int rc = zkp_pack_args(neighbors8_by_level_u32,
                            sides,
                            LEVELS,
                            args_buf,
@@ -84,7 +83,8 @@ B_SP("zkp_pack_args()")
 
 B_START
 	// zkp_generate_proof returns a postcard-serialized bundle: (proof, public_values)
-        rc = zkp_generate_proof(args_buf,
+        rc = zkp_generate_proof(secret16_u32,
+                                args_buf,
                                 args_len,
                                 zkp_nonce,
                                 proof_buf,

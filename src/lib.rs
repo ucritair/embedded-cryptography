@@ -17,10 +17,6 @@ use rp235x_hal::{
     self as hal, gpio::Pins, Sio,
 };
 
-// griffon
-// allow using puts() from the C pico-sdk
-//pub mod debug_ffi;
-
 
 pub mod aes_ctr;
 pub mod tfhe;
@@ -84,12 +80,12 @@ static ALLOC: Heap = Heap::empty();
 
 
 #[unsafe(no_mangle)]
-pub extern "C" fn griffon_heap_used() -> u32 {
+pub extern "C" fn rust_heap_used() -> u32 {
     return ALLOC.used() as u32;
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn griffon_heap_free() -> u32 {
+pub extern "C" fn rust_heap_free() -> u32 {
     return ALLOC.free() as u32;
 }
 
@@ -100,7 +96,7 @@ pub extern "C" fn griffon_heap_free() -> u32 {
 // PSRAM_BASE_ADDRESS   0x11000000
 // PSRAM_SIZE_BYTES (8 * 1024 * 1024) = 8388608
 #[unsafe(no_mangle)]
-pub extern "C" fn griffon_heap_init(
+pub extern "C" fn rust_heap_init(
     heap_start_addr: usize,
     heap_size: usize,
     ) {
