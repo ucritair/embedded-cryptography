@@ -1,0 +1,6 @@
+[submodule "rp2350/TinyFrame"]
+	path = rp2350/TinyFrame
+	url = https://github.com/MightyPork/TinyFrame
+[submodule "rp2350/pico-sdk"]
+	path = rp2350/pico-sdk
+	url = https://github.com/raspberrypi/pico-sdk.git

@@ -14,7 +14,8 @@ use rp235x_hal as _;
 
 use embedded_hal::digital::{OutputPin};
 use rp235x_hal::{
-    self as hal, gpio::Pins, Sio,
+//    self as hal, gpio::Pins, Sio,
+    self as hal, Sio,
 };
 
 
