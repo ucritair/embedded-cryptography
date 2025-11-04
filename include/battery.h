@@ -73,18 +73,44 @@ int32_t tfhe_pk_encrypt(const uint8_t *pk,
                         size_t *out_written);
 
 /**
- * Generate a Merkle-path ZK proof using a single opaque serialized argument, with a separate nonce.
+ * Compute the parent hash from the two secret leaves using the same Poseidon2 parameters
+ * and orientation used in the Merkle tree: parent = H(leaf || sibling) with selector=0.
  * Inputs:
- * - `args`/`args_len`: postcard-serialized OpaqueMerklePathArgs
+ * - `secret16_u32`: two concatenated leaves as 16 u32 words.
+ * Outputs:
+ * - `parent8_u32_out`: 8 u32 words with the parent field elements.
+ */
+int32_t zkp_parent_from_secret(const uint32_t *secret16_u32, uint32_t *parent8_u32_out);
+
+/**
+ * Encrypt bytes and return raw TRLWE ciphertext coefficients (no serialization).
+ * a_out and b_out must each point to arrays of length TFHE_TRLWE_N.
+ */
+int32_t tfhe_pk_encrypt_raw(const uint8_t *pk,
+                            size_t pk_len,
+                            const uint8_t *bytes,
+                            size_t bytes_len,
+                            const uint8_t *seed32,
+                            size_t seed_len,
+                            uint64_t *a_out,
+                            uint64_t *b_out);
+
+/**
+ * Generate a Merkle-path ZK proof. The device provides both secret leaves,
+ * and the opaque args contain the parent→root path supplied by the server.
+ * Inputs:
+ * - `secret16_u32`: two concatenated leaves as 16 `u32` words: [leaf(8) | sibling(8)]
+ * - `args`/`args_len`: postcard-serialized OpaqueMerklePathArgs (parent→root)
  * - `nonce32` (len=`BATTERY_NONCE_LEN`)
  * Outputs:
  * - `proof_out`/`proof_out_len`: caller-provided buffer for postcard-serialized bundle:
- *   (proof, public_values) where public_values = [root(8) | nonce_field(8) | hash(nonce||leaf)(8)].
+ *   (proof, public_values) where public_values = [root(8) | nonce_field(8) | hash(leaf||nonce)(8)].
  * - `out_proof_written`: number of bytes written. If too small, returns `BATTERY_ERR_BUFSZ`.
  *
  * Serialization: postcard 1.x (stable).
  */
-int32_t zkp_generate_proof(const uint8_t *args,
+int32_t zkp_generate_proof(const uint32_t *secret16_u32,
+                           const uint8_t *args,
                            size_t args_len,
                            const uint8_t *nonce32,
                            uint8_t *proof_out,
@@ -112,8 +138,7 @@ int32_t tfhe_pack_public_key(const uint64_t *pk_a,
  * Pack Merkle path arguments into a postcard-serialized opaque buffer.
  * Serialization: postcard 1.x (stable).
  */
-int32_t zkp_pack_args(const uint32_t *leaf8_u32,
-                      const uint32_t *neighbors8_by_level_u32,
+int32_t zkp_pack_args(const uint32_t *neighbors8_by_level_u32,
                       const uint8_t *sides_bitflags,
                       size_t levels,
                       uint8_t *out,
