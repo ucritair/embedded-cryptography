@@ -22,6 +22,8 @@ typedef enum {
 
     MSG_TYPE_SET_WIFI_CREDENTIALS = 0x51,
     MSG_TYPE_FIRMWARE_VERSION_QUERY = 0x5F,
+    MSG_TYPE_WIFI_SCAN_REQUEST = 0x52,
+    MSG_TYPE_REBOOT_TO_BOOTLOADER = 0x53,
 } host_to_device_msg_type_t;
 
 // Sent from Device to Host
@@ -31,6 +33,8 @@ typedef enum {
 
     MSG_TYPE_SET_WIFI_CREDENTIALS_ACK = 0x51,
     MSG_TYPE_FIRMWARE_VERSION_RESPONSE = 0x5F,
+    MSG_TYPE_WIFI_SCAN_RESPONSE = 0x52,
+    MSG_TYPE_REBOOT_TO_BOOTLOADER_ACK = 0x53,
 } device_to_host_msg_type_t;
 
 // --- Message Payloads ---
@@ -53,6 +57,22 @@ typedef struct __attribute__((__packed__)) {
     char ssid[MAX_SSID_LEN];
     char password[MAX_PASSWORD_LEN];
 } msg_payload_set_wifi_credentials_t;
+
+// Payload for WiFi scan results
+#define MAX_SCAN_RESULTS 10
+
+typedef struct __attribute__((__packed__)) {
+    char ssid[MAX_SSID_LEN];
+    uint8_t bssid[6];
+    int8_t rssi;           // Signal strength in dBm
+    uint8_t channel;
+    uint8_t auth_mode;     // 0=Open, 1=WEP, 2=WPA, 3=WPA2, 4=WPA/WPA2
+} wifi_ap_record_t;
+
+typedef struct __attribute__((__packed__)) {
+    uint8_t count;         // Number of APs found (up to MAX_SCAN_RESULTS)
+    wifi_ap_record_t aps[MAX_SCAN_RESULTS];
+} msg_payload_wifi_scan_response_t;
 
 
 #endif // IPC_H

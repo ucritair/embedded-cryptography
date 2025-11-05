@@ -59,7 +59,6 @@ static TinyFrame *tf;
 TF_Result firmware_version_listener(TinyFrame *tf, TF_Msg *msg)
 {
     printf("Received firmware version query.\n");
-    https_download_signature();
     static msg_payload_version_response_t response;
     response.version = (FIRMWARE_VERSION_MAJOR << 24) | (FIRMWARE_VERSION_MINOR << 16) | FIRMWARE_VERSION_PATCH;
 
@@ -122,12 +121,160 @@ TF_Result sensor_data_listener(TinyFrame *tf, TF_Msg *msg)
     if (msg->len == sizeof(msg_payload_sensor_data_t)) {
         msg_payload_sensor_data_t *payload = (msg_payload_sensor_data_t *)msg->data;
         printf("Received sensor data with value: %u\n", payload->sensor_value);
-        
+
         // Acknowledge the message
         TF_Respond(tf, msg);
     } else {
         printf("Received sensor data with invalid payload size: %u\n", msg->len);
     }
+    return TF_STAY;
+}
+
+// WiFi scan state
+static msg_payload_wifi_scan_response_t scan_results = {0};
+static volatile bool scan_in_progress = false;
+
+/**
+ * WiFi scan callback - called for each AP found
+ */
+static int scan_result_callback(void *env, const cyw43_ev_scan_result_t *result)
+{
+    if (!result || scan_results.count >= MAX_SCAN_RESULTS) {
+        return 0;
+    }
+
+    // Check if this BSSID already exists (deduplicate by MAC address)
+    for (int i = 0; i < scan_results.count; i++) {
+        if (memcmp(scan_results.aps[i].bssid, result->bssid, 6) == 0) {
+            // Already have this AP, update RSSI if stronger
+            if (result->rssi > scan_results.aps[i].rssi) {
+                scan_results.aps[i].rssi = result->rssi;
+            }
+            return 0;
+        }
+    }
+
+    // New AP - add it
+    wifi_ap_record_t *ap = &scan_results.aps[scan_results.count];
+
+    // Copy SSID
+    size_t ssid_len = result->ssid_len;
+    if (ssid_len > MAX_SSID_LEN - 1) ssid_len = MAX_SSID_LEN - 1;
+    memcpy(ap->ssid, result->ssid, ssid_len);
+    ap->ssid[ssid_len] = '\0';
+
+    // Copy BSSID
+    memcpy(ap->bssid, result->bssid, 6);
+
+    // RSSI
+    ap->rssi = result->rssi;
+
+    // Channel
+    ap->channel = result->channel;
+
+    // Auth mode (simplified mapping)
+    if (result->auth_mode == 0) {
+        ap->auth_mode = 0; // Open
+    } else if (result->auth_mode & 0x00400000) {
+        ap->auth_mode = 3; // WPA2
+    } else if (result->auth_mode & 0x00200000) {
+        ap->auth_mode = 2; // WPA
+    } else {
+        ap->auth_mode = 1; // WEP or other
+    }
+
+    scan_results.count++;
+    printf("  Found: %s [%02X:%02X:%02X:%02X:%02X:%02X] (RSSI: %d dBm, Ch: %d)\n",
+           ap->ssid,
+           ap->bssid[0], ap->bssid[1], ap->bssid[2],
+           ap->bssid[3], ap->bssid[4], ap->bssid[5],
+           ap->rssi, ap->channel);
+
+    return 0;
+}
+
+/**
+ * Listener for WiFi scan request (type MSG_TYPE_WIFI_SCAN_REQUEST)
+ */
+TF_Result wifi_scan_listener(TinyFrame *tf, TF_Msg *msg)
+{
+    printf("Received WiFi scan request\n");
+
+    if (scan_in_progress) {
+        printf("Scan already in progress\n");
+        // Send empty response
+        scan_results.count = 0;
+        msg->data = (const uint8_t *)&scan_results;
+        msg->len = sizeof(scan_results);
+        TF_Respond(tf, msg);
+        return TF_STAY;
+    }
+
+    // Reset scan results
+    memset(&scan_results, 0, sizeof(scan_results));
+    scan_in_progress = true;
+
+    // Perform WiFi scan with extended options
+    printf("Starting WiFi scan (this may take 10-15 seconds)...\n");
+    cyw43_wifi_scan_options_t scan_options = {
+        .scan_type = 0,  // Active scan
+    };
+    int err = cyw43_wifi_scan(&cyw43_state, &scan_options, NULL, scan_result_callback);
+
+    if (err == 0) {
+        // Wait for scan to complete (allow longer time for thorough scan)
+        // Typical scan: ~1-2 seconds per channel, ~13 channels = up to 26 seconds
+        int timeout = 200; // 20 seconds timeout
+        int elapsed = 0;
+        while (cyw43_wifi_scan_active(&cyw43_state) && timeout > 0) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            timeout--;
+            elapsed++;
+            if (elapsed % 10 == 0) {
+                printf("  Scanning... (%d seconds elapsed)\n", elapsed / 10);
+            }
+        }
+
+        if (timeout == 0) {
+            printf("WiFi scan timed out after 20 seconds\n");
+        } else {
+            printf("WiFi scan complete in %d seconds. Found %d unique APs\n", elapsed / 10, scan_results.count);
+        }
+    } else {
+        printf("WiFi scan failed with error: %d\n", err);
+        scan_results.count = 0;
+    }
+
+    scan_in_progress = false;
+
+    // Send response
+    msg->data = (const uint8_t *)&scan_results;
+    msg->len = sizeof(scan_results);
+    TF_Respond(tf, msg);
+
+    return TF_STAY;
+}
+
+/**
+ * Listener for reboot to bootloader request (type MSG_TYPE_REBOOT_TO_BOOTLOADER)
+ */
+TF_Result reboot_to_bootloader_listener(TinyFrame *tf, TF_Msg *msg)
+{
+    printf("Received reboot to bootloader request\n");
+
+    // Send ACK first
+    TF_Respond(tf, msg);
+
+    // Give time for ACK to be sent
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    printf("Rebooting into USB bootloader mode...\n");
+
+    // For RP2350, use the ROM function directly
+    // This is equivalent to holding BOOTSEL during reset
+    rom_reset_usb_boot_extra(0, 0, 0);
+
+    // Should never reach here
     return TF_STAY;
 }
 
@@ -228,6 +375,8 @@ void main_task(__unused void *params) {
     TF_AddTypeListener(tf, MSG_TYPE_PROTOCOL_VERSION_QUERY, protocol_version_listener);
     TF_AddTypeListener(tf, MSG_TYPE_SET_WIFI_CREDENTIALS, set_wifi_credentials_listener);
     TF_AddTypeListener(tf, MSG_TYPE_SENSOR_DATA, sensor_data_listener);
+    TF_AddTypeListener(tf, MSG_TYPE_WIFI_SCAN_REQUEST, wifi_scan_listener);
+    TF_AddTypeListener(tf, MSG_TYPE_REBOOT_TO_BOOTLOADER, reboot_to_bootloader_listener);
 
     int i = 0;
     while (true) {
