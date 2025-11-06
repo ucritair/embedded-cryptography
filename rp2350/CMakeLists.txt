@@ -25,8 +25,9 @@ add_library(tinyframe STATIC
 )
 target_include_directories(tinyframe PUBLIC
     TinyFrame
-    src
+    app
+    app/config
 )
 
 # Add the subdirectory for our project
-add_subdirectory(src)
+add_subdirectory(app)

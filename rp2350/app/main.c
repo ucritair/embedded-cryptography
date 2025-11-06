@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <sys/time.h>
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
 #include "TinyFrame.h"
@@ -15,11 +16,17 @@
 #include "task.h"
 
 #include "httpss_client.h"
+#include "lwip/apps/sntp.h"
+#include <time.h>
 
 // Global variables for WiFi credentials
 static char wifi_ssid[MAX_SSID_LEN + 1];
 static char wifi_password[MAX_PASSWORD_LEN + 1];
-static bool wifi_credentials_set = false;
+
+// Time synchronization state
+static uint64_t sntp_sync_time_us = 0;
+static time_t sntp_sync_time_sec = 0;
+
 
 typedef enum {
     APP_STATE_WAIT_CREDENTIALS,
@@ -29,6 +36,47 @@ typedef enum {
 } app_state_t;
 
 static app_state_t app_state = APP_STATE_WAIT_CREDENTIALS;
+
+void sntp_init_func(void)
+{
+    printf("Initializing SNTP...\n");
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_init();
+    printf("SNTP initialized.\n");
+}
+
+// Callback function called by SNTP client when time is synchronized
+void sntp_set_system_time(u32_t sec)
+{
+    if (sec > 0) {
+        sntp_sync_time_sec = sec;
+        sntp_sync_time_us = time_us_64();
+        
+        char buf[32];
+        time_t now = sntp_sync_time_sec;
+        struct tm* utc = gmtime(&now);
+        strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", utc);
+        printf("SNTP time synchronized: %s\n", buf);
+    }
+}
+
+// Override for the C library's time function
+int _gettimeofday(struct timeval *tv, void *tz) {
+    if (sntp_sync_time_sec > 0) {
+        // Time has been synchronized
+        uint64_t current_us = time_us_64();
+        uint64_t elapsed_us = current_us - sntp_sync_time_us;
+        tv->tv_sec = sntp_sync_time_sec + (elapsed_us / 1000000);
+        tv->tv_usec = (elapsed_us % 1000000);
+    } else {
+        // Time not synchronized yet, return 0 or a boot-based time
+        tv->tv_sec = 0;
+        tv->tv_usec = 0;
+    }
+    return 0;
+}
+
 
 // Task priorities
 #define MAIN_TASK_PRIORITY      ( tskIDLE_PRIORITY + 1UL )
@@ -400,6 +448,23 @@ void main_task(__unused void *params) {
     TF_AddTypeListener(tf, MSG_TYPE_WIFI_SCAN_REQUEST, wifi_scan_listener);
     TF_AddTypeListener(tf, MSG_TYPE_REBOOT_TO_BOOTLOADER, reboot_to_bootloader_listener);
 
+    // TEMPORARY CODE: Connect to WiFi and talk to Balvi server
+    strncpy(wifi_ssid, "Zaviyar-Home-2G", MAX_SSID_LEN);
+    wifi_ssid[MAX_SSID_LEN] = '\0';
+    strncpy(wifi_password, "ZaviyarWasim", MAX_PASSWORD_LEN);
+    wifi_password[MAX_PASSWORD_LEN] = '\0';
+
+    printf("Connecting to WiFi (hardcoded credentials)...\n");
+    if (connect_to_wifi(WIFI_AUTH_WPA2)) {
+        printf("Connected! Talking to Balvi server...\n");
+        sntp_init_func();
+        balvi_api_health_check("air.gp.xyz");
+        printf("Getting configuration...\n");
+        balvi_api_get_config("air.gp.xyz");
+    } else {
+        printf("Failed to connect to WiFi with hardcoded credentials\n");
+    }
+
     int i = 0;
     while (true) {
         // TinyFrame processing
@@ -425,8 +490,20 @@ void main_task(__unused void *params) {
         if (i == 0) {
             printf("Running Crypto Test \n");
             do_crypto_ops();
-            i = 1;
         }
+
+        if (i++ % 10000 == 0) {
+            time_t now = time(NULL);
+            struct tm *utc = gmtime(&now);
+            if (utc->tm_year > (2000 - 1900)) { // Check if time is likely synchronized
+                char buf[48];
+                strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", utc);
+                printf("Current time: %s\n", buf);
+            } else {
+                printf("Time not yet synchronized.\n");
+            }
+        }
+
         vTaskDelay(1);
     }
 }

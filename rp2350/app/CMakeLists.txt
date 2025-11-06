@@ -8,20 +8,25 @@ add_executable(pico_project
     main.c
     tf_port.c
     ipc.c
+    cloud/balvi_config.c
     http/httpss_client.c
 
     # Crypto Ops
-    battery_e2e.c
+    # TODO: Improve name
+    crypto/battery_e2e.c
 )
 
-target_include_directories(pico_project PUBLIC 
+target_include_directories(pico_project PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/cloud
+    ${CMAKE_CURRENT_SOURCE_DIR}/crypto
+    ${CMAKE_CURRENT_SOURCE_DIR}/config
     ${CMAKE_CURRENT_SOURCE_DIR}/http
     ${CMAKE_SOURCE_DIR}/../
 )
 
 # pull in common dependencies
-target_link_libraries(pico_project pico_stdlib tinyframe pico_cyw43_arch_lwip_sys_freertos pico_lwip pico_multicore
+target_link_libraries(pico_project pico_stdlib tinyframe pico_cyw43_arch_lwip_sys_freertos pico_lwip pico_lwip_sntp pico_multicore
     pico_async_context_freertos
     pico_bootrom
     FreeRTOS-Kernel-Heap4

@@ -33,4 +33,12 @@
 #undef LWIP_DEBUG
 #define ALTCP_MBEDTLS_DEBUG  LWIP_DBG_ON
 
+#define LWIP_SNTP 1
+#define SNTP_SERVER_DNS 1
+#define MEMP_NUM_SYS_TIMEOUT 10
+
+#define LWIP_DEBUG 1
+#define SNTP_DEBUG LWIP_DBG_ON
+#define SNTP_SET_SYSTEM_TIME sntp_set_system_time
+
 #endif
