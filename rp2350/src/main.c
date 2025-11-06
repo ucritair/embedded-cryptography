@@ -38,10 +38,31 @@ static app_state_t app_state = APP_STATE_WAIT_CREDENTIALS;
 #define MAIN_TASK_STACK_SIZE 1024
 #define CRYPTO_TASK_STACK_SIZE 2048
 
-static bool connect_to_wifi(void)
+static bool connect_to_wifi(uint8_t auth_mode)
 {
-    printf("Connecting to Wi-Fi...\n");
-    if (cyw43_arch_wifi_connect_timeout_ms(wifi_ssid, wifi_password, CYW43_AUTH_WPA2_AES_PSK, 30000)) {
+    // Map our simple auth mode to CYW43 auth constants
+    uint32_t cyw43_auth;
+    switch (auth_mode) {
+        case WIFI_AUTH_OPEN:
+            cyw43_auth = CYW43_AUTH_OPEN;
+            break;
+        case WIFI_AUTH_WPA:
+            cyw43_auth = CYW43_AUTH_WPA_TKIP_PSK;
+            break;
+        case WIFI_AUTH_WPA2:
+            cyw43_auth = CYW43_AUTH_WPA2_AES_PSK;
+            break;
+        case WIFI_AUTH_WPA_WPA2:
+            cyw43_auth = CYW43_AUTH_WPA2_MIXED_PSK;
+            break;
+        default:
+            printf("Unknown auth mode: %u, defaulting to WPA2\n", auth_mode);
+            cyw43_auth = CYW43_AUTH_WPA2_AES_PSK;
+            break;
+    }
+
+    printf("Connecting to Wi-Fi (SSID: %s, Auth: %u)...\n", wifi_ssid, auth_mode);
+    if (cyw43_arch_wifi_connect_timeout_ms(wifi_ssid, wifi_password, cyw43_auth, 30000)) {
         printf("failed to connect to Wi-Fi.\n");
         return false;
     } else {
@@ -84,22 +105,22 @@ TF_Result protocol_version_listener(TinyFrame *tf, TF_Msg *msg)
 }
 
 /**
- * Listener for setting WiFi credentials (type MSG_TYPE_SET_WIFI_CREDENTIALS)
+ * Listener for WiFi connect request (type MSG_TYPE_WIFI_CONNECT)
  */
-TF_Result set_wifi_credentials_listener(TinyFrame *tf, TF_Msg *msg)
+TF_Result wifi_connect_listener(TinyFrame *tf, TF_Msg *msg)
 {
-    printf("Received WiFi credentials. Attempting to connect (this will block)...\n");
+    printf("Received WiFi connect request. Attempting to connect (this will block)...\n");
 
-    if (msg->len == sizeof(msg_payload_set_wifi_credentials_t)) {
+    if (msg->len == sizeof(msg_payload_wifi_connect_t)) {
         // Copy credentials from payload
-        msg_payload_set_wifi_credentials_t *credentials = (msg_payload_set_wifi_credentials_t *)msg->data;
+        msg_payload_wifi_connect_t *credentials = (msg_payload_wifi_connect_t *)msg->data;
         strncpy(wifi_ssid, credentials->ssid, MAX_SSID_LEN);
         wifi_ssid[MAX_SSID_LEN] = '\0';
         strncpy(wifi_password, credentials->password, MAX_PASSWORD_LEN);
         wifi_password[MAX_PASSWORD_LEN] = '\0';
 
-        // Perform the blocking connection attempt
-        if (connect_to_wifi()) {
+        // Perform the blocking connection attempt with specified auth mode
+        if (connect_to_wifi(credentials->auth_mode)) {
             // On success, update state and send ACK
             app_state = APP_STATE_WIFI_CONNECTED_IDLE;
             TF_Respond(tf, msg); // ACK indicates success
@@ -108,7 +129,8 @@ TF_Result set_wifi_credentials_listener(TinyFrame *tf, TF_Msg *msg)
             app_state = APP_STATE_WAIT_CREDENTIALS; // Go back to waiting
         }
     } else {
-        printf("Received WiFi credentials with invalid payload size: %u\n", msg->len);
+        printf("Received WiFi connect with invalid payload size: %u (expected %u)\n",
+               msg->len, sizeof(msg_payload_wifi_connect_t));
     }
     return TF_STAY;
 }
@@ -373,7 +395,7 @@ void main_task(__unused void *params) {
     tf = TF_Init(TF_MASTER);
     TF_AddTypeListener(tf, MSG_TYPE_FIRMWARE_VERSION_QUERY, firmware_version_listener);
     TF_AddTypeListener(tf, MSG_TYPE_PROTOCOL_VERSION_QUERY, protocol_version_listener);
-    TF_AddTypeListener(tf, MSG_TYPE_SET_WIFI_CREDENTIALS, set_wifi_credentials_listener);
+    TF_AddTypeListener(tf, MSG_TYPE_WIFI_CONNECT, wifi_connect_listener);
     TF_AddTypeListener(tf, MSG_TYPE_SENSOR_DATA, sensor_data_listener);
     TF_AddTypeListener(tf, MSG_TYPE_WIFI_SCAN_REQUEST, wifi_scan_listener);
     TF_AddTypeListener(tf, MSG_TYPE_REBOOT_TO_BOOTLOADER, reboot_to_bootloader_listener);
