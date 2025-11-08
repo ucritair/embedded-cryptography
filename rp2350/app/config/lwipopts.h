@@ -26,6 +26,13 @@
 // If you don't want to use TLS (just a http request) you can avoid linking to mbedtls and remove the following
 #define LWIP_ALTCP_TLS           1
 #define LWIP_ALTCP_TLS_MBEDTLS   1
+ 
+// Increase TCP window size for TLS to avoid stalling
+// mbedTLS needs 16KB for RX decryption buffer, so TCP_WND should be>
+#define TCP_MSS 1460
+#define TCP_WND (16 * 1024)  // 16KB window
+#define TCP_SND_BUF (8 * TCP_MSS)  // 8 * 1460 = ~11KB send buffer
+#define PBUF_POOL_SIZE 24  // Increase pbuf pool for larger transfers
 
 // Note bug in lwip with LWIP_ALTCP and LWIP_DEBUG
 // https://savannah.nongnu.org/bugs/index.php?62159

@@ -17,6 +17,7 @@
 #include "task.h"
 
 #include "httpss_client.h"
+#include "http_post_client.h"
 #include "lwip/apps/sntp.h"
 #include <time.h>
 
@@ -398,6 +399,7 @@ void init_psram()
 void core1_battery_e2e ()
 {
 	battery_e2e();
+    // zkp_auth_demo();
 
 	printf(">>> CORE1 DONE, SPINNING <<<\n");
 	while ( true )

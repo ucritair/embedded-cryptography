@@ -1,5 +1,4 @@
 #include "balvi_config.h"
-#include "jsmn.h"
 #include <string.h>
 #include <stdbool.h>
 

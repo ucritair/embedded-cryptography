@@ -10,6 +10,8 @@ add_executable(pico_project
     ipc.c
     cloud/balvi_config.c
     http/httpss_client.c
+    http/http_post_client.c
+#    auth/zkp_auth.c
 
     # Crypto Ops
     # TODO: Improve name
@@ -18,11 +20,13 @@ add_executable(pico_project
 
 target_include_directories(pico_project PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/auth
     ${CMAKE_CURRENT_SOURCE_DIR}/cloud
     ${CMAKE_CURRENT_SOURCE_DIR}/crypto
     ${CMAKE_CURRENT_SOURCE_DIR}/config
     ${CMAKE_CURRENT_SOURCE_DIR}/http
     ${CMAKE_SOURCE_DIR}/../
+    ${CMAKE_SOURCE_DIR}/../include
 )
 
 # pull in common dependencies

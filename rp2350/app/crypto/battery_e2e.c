@@ -6,8 +6,7 @@
 
 #include "include/battery.h"
 #include "include/battery_helpers.h"
-
-
+#include "zkp_auth.h"
 
 // for benchmarking with time_us_64()
 #include "pico/stdlib.h"
@@ -182,6 +181,75 @@ B_SP("aes_ctr_encrypt()")
     for (int i = 0; i < 16; i++) printf("%02x", data[i]);
     printf("\n");
 
+    return 0;
+}
+
+// Demo function for ZKP authentication flow
+int zkp_auth_demo(void) {
+    // printf("\n=== ZKP Authentication Demo ===\n");
+
+    // // Test secret from Bilal
+    // const char* test_secret_b64 = "AQAAAAIAAAADAAAABAAAAAUAAAAGAAAABwAAAAgAAAAJAAAACgAAAAsAAAAMAAAADQAAAA4AAAAPAAAAEAAAAA==";
+    // const char* api_hostname = "air.gp.xyz";
+
+    // printf("[zkp_auth_demo] Initializing with test secret\n");
+    // int rc = zkp_auth_init(test_secret_b64);
+    // if (rc != ZKP_AUTH_OK) {
+    //     printf("[zkp_auth_demo] Failed to initialize: %d\n", rc);
+    //     return -1;
+    // }
+
+    // printf("[zkp_auth_demo] Computing parent commitment\n");
+    // char parent_b64[128];
+    // rc = zkp_auth_compute_parent(parent_b64, sizeof(parent_b64));
+    // if (rc != ZKP_AUTH_OK) {
+    //     printf("[zkp_auth_demo] Failed to compute parent: %d\n", rc);
+    //     return -1;
+    // }
+
+    // printf("[zkp_auth_demo] Parent commitment: %s\n", parent_b64);
+
+    // printf("\n[zkp_auth_demo] Step 1: Get Merkle witness from server\n");
+    // rc = zkp_auth_get_witness(api_hostname);
+    // if (rc != ZKP_AUTH_OK) {
+    //     printf("[zkp_auth_demo] Failed to get witness: %d\n", rc);
+    //     printf("[zkp_auth_demo] NOTE: HTTP POST not fully implemented yet\n");
+    //     return -1;
+    // }
+
+    // printf("\n[zkp_auth_demo] Step 2: Get current nonce from server\n");
+    // rc = zkp_auth_get_nonce(api_hostname);
+    // if (rc != ZKP_AUTH_OK) {
+    //     printf("[zkp_auth_demo] Failed to get nonce: %d\n", rc);
+    //     printf("[zkp_auth_demo] NOTE: HTTP GET implementation needed\n");
+    //     return -1;
+    // }
+
+    // printf("\n[zkp_auth_demo] Step 3: Generate ZKP proof\n");
+    // rc = zkp_auth_generate_proof();
+    // if (rc != ZKP_AUTH_OK) {
+    //     printf("[zkp_auth_demo] Failed to generate proof: %d\n", rc);
+    //     return -1;
+    // }
+
+    // printf("\n[zkp_auth_demo] Step 4: Submit proof for verification\n");
+    // rc = zkp_auth_verify(api_hostname);
+    // if (rc != ZKP_AUTH_OK) {
+    //     printf("[zkp_auth_demo] Failed to verify proof: %d\n", rc);
+    //     printf("[zkp_auth_demo] NOTE: HTTP POST not fully implemented yet\n");
+    //     return -1;
+    // }
+
+    // printf("\n[zkp_auth_demo] Step 5: Use access token for authenticated requests\n");
+    // const char* token = zkp_auth_get_token();
+    // if (token) {
+    //     printf("[zkp_auth_demo] Access token: %.32s...\n", token);
+    //     printf("[zkp_auth_demo] Token is valid: %s\n", zkp_auth_is_token_valid() ? "yes" : "no");
+    // } else {
+    //     printf("[zkp_auth_demo] No valid token available\n");
+    // }
+
+    // printf("\n=== ZKP Authentication Demo Complete ===\n");
     return 0;
 }
 

@@ -1,18 +1,18 @@
+#include "httpss_client.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
 #include "lwip/altcp_tls.h"
 #include "lwip/netif.h"
 #include "http_client_util.h"
-#include "balvi_config.h"
+#include "http_post_client.h"
+
+#define JSMN_STATIC
+#include "jsmn.h"
 
 // Response buffer for storing API responses
 static char response_buffer[8192];
 static size_t response_len = 0;
 static balvi_config_t current_config;
-
-// Using this url as we know the root cert won't change for a long time
-#define HOST "fw-download-alias1.raspberrypi.com"
-#define URL_REQUEST "/net_install/boot.sig"
 
 // Google Trust Services root certificate for air.gp.xyz
 #define GTS_ROOT_CERT "-----BEGIN CERTIFICATE-----\n\
@@ -36,44 +36,6 @@ kGN+hr/W5GvT1tMBjgWKZ1i4//emhA1JG1BbPzoLJQvyEotc03lXjTaCzv8mEbep\n\
 8RqZ7a2CPsgRbuvTPBwcOMBBmuFeU88+FSBX6+7iP0il8b4Z0QFqIwwMHfs/L6K1\n\
 vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl\n\
 -----END CERTIFICATE-----\n"
-
-// Raspberry Pi certificate (kept for existing function)
-#define TLS_ROOT_CERT_OK "-----BEGIN CERTIFICATE-----\n\
-MIIC+jCCAn+gAwIBAgICEAAwCgYIKoZIzj0EAwIwgbcxCzAJBgNVBAYTAkdCMRAw\n\
-DgYDVQQIDAdFbmdsYW5kMRIwEAYDVQQHDAlDYW1icmlkZ2UxHTAbBgNVBAoMFFJh\n\
-c3BiZXJyeSBQSSBMaW1pdGVkMRwwGgYDVQQLDBNSYXNwYmVycnkgUEkgRUNDIENB\n\
-MR0wGwYDVQQDDBRSYXNwYmVycnkgUEkgUm9vdCBDQTEmMCQGCSqGSIb3DQEJARYX\n\
-c3VwcG9ydEByYXNwYmVycnlwaS5jb20wIBcNMjExMjA5MTEzMjU1WhgPMjA3MTEx\n\
-MjcxMTMyNTVaMIGrMQswCQYDVQQGEwJHQjEQMA4GA1UECAwHRW5nbGFuZDEdMBsG\n\
-A1UECgwUUmFzcGJlcnJ5IFBJIExpbWl0ZWQxHDAaBgNVBAsME1Jhc3BiZXJyeSBQ\n\
-SSBFQ0MgQ0ExJTAjBgNVBAMMHFJhc3BiZXJyeSBQSSBJbnRlcm1lZGlhdGUgQ0Ex\n\
-JjAkBgkqhkiG9w0BCQEWF3N1cHBvcnRAcmFzcGJlcnJ5cGkuY29tMHYwEAYHKoZI\n\
-zj0CAQYFK4EEACIDYgAEcN9K6Cpv+od3w6yKOnec4EbyHCBzF+X2ldjorc0b2Pq0\n\
-N+ZvyFHkhFZSgk2qvemsVEWIoPz+K4JSCpgPstz1fEV6WzgjYKfYI71ghELl5TeC\n\
-byoPY+ee3VZwF1PTy0cco2YwZDAdBgNVHQ4EFgQUJ6YzIqFh4rhQEbmCnEbWmHEo\n\
-XAUwHwYDVR0jBBgwFoAUIIAVCSiDPXut23NK39LGIyAA7NAwEgYDVR0TAQH/BAgw\n\
-BgEB/wIBADAOBgNVHQ8BAf8EBAMCAYYwCgYIKoZIzj0EAwIDaQAwZgIxAJYM+wIM\n\
-PC3wSPqJ1byJKA6D+ZyjKR1aORbiDQVEpDNWRKiQ5QapLg8wbcED0MrRKQIxAKUT\n\
-v8TJkb/8jC/oBVTmczKlPMkciN+uiaZSXahgYKyYhvKTatCTZb+geSIhc0w/2w==\n\
------END CERTIFICATE-----\n"
-
-void https_download_signature(void) {
-    static const uint8_t cert_ok[] = TLS_ROOT_CERT_OK;
-    static EXAMPLE_HTTP_REQUEST_T req = {0};
-    req.hostname = HOST;
-    req.url = URL_REQUEST;
-    req.headers_fn = http_client_header_print_fn;
-    req.recv_fn = http_client_receive_print_fn;
-    req.tls_config = altcp_tls_create_config_client(cert_ok, sizeof(cert_ok));
-
-    int pass = http_client_request_sync(cyw43_arch_async_context(), &req);
-    altcp_tls_free_config(req.tls_config);
-    if (pass != 0) {
-        printf("HTTPS download failed\n");
-    } else {
-        printf("HTTPS download successful\n");
-    }
-}
 
 void balvi_api_health_check(const char* hostname) {
     static const uint8_t gts_cert[] = GTS_ROOT_CERT;
@@ -147,4 +109,225 @@ void balvi_api_get_config(const char* hostname) {
 
 balvi_config_t* get_current_config(void) {
     return current_config.valid ? &current_config : NULL;
+}
+
+// JSON parsing helper
+static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
+    if (tok->type == JSMN_STRING && (int)strlen(s) == tok->end - tok->start &&
+        strncmp(json + tok->start, s, tok->end - tok->start) == 0) {
+        return 0;
+    }
+    return -1;
+}
+
+// Auth endpoint implementations
+
+int balvi_api_get_witness(const char* hostname, const char* parent_b64, witness_response_t* response) {
+    printf("[balvi_api] POST /auth/witness\n");
+
+    // Build JSON payload
+    char json_payload[512];
+    snprintf(json_payload, sizeof(json_payload),
+             "{\"commitment_b64\":\"%s\"}", parent_b64);
+
+    // Send POST request
+    http_response_t http_resp;
+    int rc = https_post_json(hostname, "/auth/witness", json_payload, &http_resp);
+
+    if (rc != 0 || !http_resp.success) {
+        printf("[balvi_api] POST failed: rc=%d, status=%d\n", rc, http_resp.status_code);
+        if (response) response->valid = false;
+        http_response_free(&http_resp);
+        return -1;
+    }
+
+    printf("[balvi_api] Response (%zu bytes): %s\n", http_resp.body_len, http_resp.body);
+
+    // Parse JSON response
+    jsmn_parser p;
+    jsmntok_t tokens[32];
+    jsmn_init(&p);
+
+    int token_count = jsmn_parse(&p, http_resp.body, http_resp.body_len, tokens, 32);
+    if (token_count < 0 || tokens[0].type != JSMN_OBJECT) {
+        printf("[balvi_api] JSON parse failed\n");
+        if (response) response->valid = false;
+        http_response_free(&http_resp);
+        return -1;
+    }
+
+    // Extract fields
+    bool found_root = false, found_witness = false;
+    for (int i = 1; i < token_count; i++) {
+        if (jsoneq(http_resp.body, &tokens[i], "root_b64") == 0) {
+            int len = tokens[i+1].end - tokens[i+1].start;
+            if (len < sizeof(response->root_b64)) {
+                strncpy(response->root_b64, http_resp.body + tokens[i+1].start, len);
+                response->root_b64[len] = '\0';
+                found_root = true;
+            }
+            i++;
+        } else if (jsoneq(http_resp.body, &tokens[i], "witness_b64") == 0) {
+            int len = tokens[i+1].end - tokens[i+1].start;
+            if (len < sizeof(response->witness_b64)) {
+                strncpy(response->witness_b64, http_resp.body + tokens[i+1].start, len);
+                response->witness_b64[len] = '\0';
+                found_witness = true;
+            }
+            i++;
+        }
+    }
+
+    response->valid = found_root && found_witness;
+    http_response_free(&http_resp);
+
+    if (response->valid) {
+        printf("[balvi_api] Witness retrieved successfully\n");
+        return 0;
+    } else {
+        printf("[balvi_api] Missing fields in response\n");
+        return -1;
+    }
+}
+
+int balvi_api_get_nonce(const char* hostname, nonce_response_t* response) {
+    printf("[balvi_api] GET /auth/nonce\n");
+
+    // Send GET request
+    http_response_t http_resp;
+    int rc = https_get(hostname, "/auth/nonce", &http_resp);
+
+    if (rc != 0 || !http_resp.success) {
+        printf("[balvi_api] GET failed: rc=%d, status=%d\n", rc, http_resp.status_code);
+        if (response) response->valid = false;
+        http_response_free(&http_resp);
+        return -1;
+    }
+
+    printf("[balvi_api] Response (%zu bytes): %s\n", http_resp.body_len, http_resp.body);
+
+    // Parse JSON response
+    jsmn_parser p;
+    jsmntok_t tokens[16];
+    jsmn_init(&p);
+
+    int token_count = jsmn_parse(&p, http_resp.body, http_resp.body_len, tokens, 16);
+    if (token_count < 0 || tokens[0].type != JSMN_OBJECT) {
+        printf("[balvi_api] JSON parse failed\n");
+        if (response) response->valid = false;
+        http_response_free(&http_resp);
+        return -1;
+    }
+
+    // Extract fields
+    bool found_nonce = false, found_expires = false;
+    for (int i = 1; i < token_count; i++) {
+        if (jsoneq(http_resp.body, &tokens[i], "nonce") == 0) {
+            int len = tokens[i+1].end - tokens[i+1].start;
+            if (len < sizeof(response->nonce)) {
+                strncpy(response->nonce, http_resp.body + tokens[i+1].start, len);
+                response->nonce[len] = '\0';
+                found_nonce = true;
+            }
+            i++;
+        } else if (jsoneq(http_resp.body, &tokens[i], "expires_at") == 0) {
+            int len = tokens[i+1].end - tokens[i+1].start;
+            if (len < sizeof(response->expires_at)) {
+                strncpy(response->expires_at, http_resp.body + tokens[i+1].start, len);
+                response->expires_at[len] = '\0';
+                found_expires = true;
+            }
+            i++;
+        }
+    }
+
+    response->valid = found_nonce && found_expires;
+    http_response_free(&http_resp);
+
+    if (response->valid) {
+        printf("[balvi_api] Nonce retrieved successfully (expires: %s)\n", response->expires_at);
+        return 0;
+    } else {
+        printf("[balvi_api] Missing fields in response\n");
+        return -1;
+    }
+}
+
+int balvi_api_verify_proof(const char* hostname, const char* nonce_b64, const char* proof_b64, auth_verify_response_t* response) {
+    printf("[balvi_api] POST /auth/verify\n");
+    printf("[balvi_api]   nonce_b64: %s\n", nonce_b64);
+    printf("[balvi_api]   proof_b64 length: %zu\n", strlen(proof_b64));
+
+    // Build JSON payload (may be large due to proof)
+    size_t payload_size = strlen(nonce_b64) + strlen(proof_b64) + 128;
+    char *json_payload = malloc(payload_size);
+    if (!json_payload) {
+        printf("[balvi_api] Out of memory for JSON payload\n");
+        if (response) response->valid = false;
+        return -1;
+    }
+
+    snprintf(json_payload, payload_size,
+             "{\"nonce\":\"%s\",\"proof_bundle\":\"%s\"}",
+             nonce_b64, proof_b64);
+
+    // Send POST request
+    http_response_t http_resp;
+    int rc = https_post_json(hostname, "/auth/verify", json_payload, &http_resp);
+    free(json_payload);
+
+    if (rc != 0 || !http_resp.success) {
+        printf("[balvi_api] POST failed: rc=%d, status=%d\n", rc, http_resp.status_code);
+        if (response) response->valid = false;
+        http_response_free(&http_resp);
+        return -1;
+    }
+
+    printf("[balvi_api] Response (%zu bytes): %s\n", http_resp.body_len, http_resp.body);
+
+    // Parse JSON response
+    jsmn_parser p;
+    jsmntok_t tokens[16];
+    jsmn_init(&p);
+
+    int token_count = jsmn_parse(&p, http_resp.body, http_resp.body_len, tokens, 16);
+    if (token_count < 0 || tokens[0].type != JSMN_OBJECT) {
+        printf("[balvi_api] JSON parse failed\n");
+        if (response) response->valid = false;
+        http_response_free(&http_resp);
+        return -1;
+    }
+
+    // Extract fields
+    bool found_token = false, found_expires = false;
+    for (int i = 1; i < token_count; i++) {
+        if (jsoneq(http_resp.body, &tokens[i], "access_token") == 0) {
+            int len = tokens[i+1].end - tokens[i+1].start;
+            if (len < sizeof(response->access_token)) {
+                strncpy(response->access_token, http_resp.body + tokens[i+1].start, len);
+                response->access_token[len] = '\0';
+                found_token = true;
+            }
+            i++;
+        } else if (jsoneq(http_resp.body, &tokens[i], "expires_at") == 0) {
+            int len = tokens[i+1].end - tokens[i+1].start;
+            if (len < sizeof(response->expires_at)) {
+                strncpy(response->expires_at, http_resp.body + tokens[i+1].start, len);
+                response->expires_at[len] = '\0';
+                found_expires = true;
+            }
+            i++;
+        }
+    }
+
+    response->valid = found_token && found_expires;
+    http_response_free(&http_resp);
+
+    if (response->valid) {
+        printf("[balvi_api] Proof verified! Token expires: %s\n", response->expires_at);
+        return 0;
+    } else {
+        printf("[balvi_api] Missing fields in response\n");
+        return -1;
+    }
 }
