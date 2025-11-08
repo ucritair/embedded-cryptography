@@ -5,6 +5,9 @@
 #include "lwip/netif.h"
 #include "http_client_util.h"
 #include "http_post_client.h"
+#include "psram_config.h"
+#include "crypto_shared.h"
+#include <string.h>
 
 #define JSMN_STATIC
 #include "jsmn.h"
@@ -130,6 +133,8 @@ int balvi_api_get_witness(const char* hostname, const char* parent_b64, witness_
     snprintf(json_payload, sizeof(json_payload),
              "{\"commitment_b64\":\"%s\"}", parent_b64);
 
+    printf("FULL REQUEST JSON:\n%s\n", json_payload);
+
     // Send POST request
     http_response_t http_resp;
     int rc = https_post_json(hostname, "/auth/witness", json_payload, &http_resp);
@@ -141,7 +146,7 @@ int balvi_api_get_witness(const char* hostname, const char* parent_b64, witness_
         return -1;
     }
 
-    printf("[balvi_api] Response (%zu bytes): %s\n", http_resp.body_len, http_resp.body);
+    printf("FULL SERVER RESPONSE JSON (%zu bytes):\n%s\n", http_resp.body_len, http_resp.body);
 
     // Parse JSON response
     jsmn_parser p;
@@ -204,7 +209,7 @@ int balvi_api_get_nonce(const char* hostname, nonce_response_t* response) {
         return -1;
     }
 
-    printf("[balvi_api] Response (%zu bytes): %s\n", http_resp.body_len, http_resp.body);
+    printf("FULL SERVER RESPONSE JSON (%zu bytes):\n%s\n", http_resp.body_len, http_resp.body);
 
     // Parse JSON response
     jsmn_parser p;
@@ -258,32 +263,81 @@ int balvi_api_verify_proof(const char* hostname, const char* nonce_b64, const ch
     printf("[balvi_api]   nonce_b64: %s\n", nonce_b64);
     printf("[balvi_api]   proof_b64 length: %zu\n", strlen(proof_b64));
 
-    // Build JSON payload (may be large due to proof)
-    size_t payload_size = strlen(nonce_b64) + strlen(proof_b64) + 128;
-    char *json_payload = malloc(payload_size);
-    if (!json_payload) {
-        printf("[balvi_api] Out of memory for JSON payload\n");
+    size_t nonce_len = strlen(nonce_b64);
+    size_t proof_len = strlen(proof_b64);
+
+    // Calculate total JSON size
+    size_t prefix_len = strlen("{\"nonce\":\"") + nonce_len + strlen("\",\"proof_bundle\":\"");
+    size_t suffix_len = strlen("\"}");
+    size_t total_json = prefix_len + proof_len + suffix_len;
+
+    printf("[balvi_api] Building JSON payload in PSRAM (%zu bytes)\n", total_json);
+
+    // Build JSON in-place by shifting proof_b64 right to make room for prefix
+    // proof_b64 is already in crypto_shared->proof_b64
+    // We'll build the JSON at the START of proof[] buffer (which has 435KB)
+    char *json_buffer = (char*)crypto_shared->proof;  // Reuse proof buffer (no longer needed)
+
+    // Check if it fits in the proof buffer
+    if (total_json >= sizeof(crypto_shared->proof)) {
+        printf("[balvi_api] JSON payload too large: %zu >= %zu\n", total_json, sizeof(crypto_shared->proof));
         if (response) response->valid = false;
         return -1;
     }
 
-    snprintf(json_payload, payload_size,
-             "{\"nonce\":\"%s\",\"proof_bundle\":\"%s\"}",
-             nonce_b64, proof_b64);
+    // Build JSON by copying proof_b64 first, then prepending the prefix
+    char *json_ptr = json_buffer;
+    const char *prefix1 = "{\"nonce\":\"";
+    const char *prefix2 = "\",\"proof_bundle\":\"";
+    const char *suffix  = "\"}";
+
+    // Copy part 1: {"nonce":"
+    memcpy(json_ptr, prefix1, strlen(prefix1));
+    json_ptr += strlen(prefix1);
+
+    // Copy part 2: <the actual nonce>
+    memcpy(json_ptr, nonce_b64, nonce_len);
+    json_ptr += nonce_len;
+
+    // Copy part 3: ","proof_bundle":"
+    memcpy(json_ptr, prefix2, strlen(prefix2));
+    json_ptr += strlen(prefix2);
+
+    // Copy part 4: <the actual proof> - use memmove since source and dest might overlap
+    // Verify proof_b64 first/last chars before copying
+    printf("[balvi_api] proof_b64 first 20 chars: %.20s\n", proof_b64);
+    printf("[balvi_api] proof_b64 last 20 chars: %s\n", proof_b64 + proof_len - 20);
+
+    memmove(json_ptr, proof_b64, proof_len);
+    json_ptr += proof_len;
+
+    // Verify after copying
+    printf("[balvi_api] After memmove, json first 100 chars at proof pos: %.100s\n", json_buffer + prefix_len);
+    printf("[balvi_api] After memmove, json last 20 chars: %.20s\n", json_ptr - 20);
+
+    // Copy part 5: "}
+    memcpy(json_ptr, suffix, strlen(suffix));
+    json_ptr += strlen(suffix);
+
+    // Add the final null terminator
+    *json_ptr = '\0';
 
     // Send POST request
+    // Must use _2 version with chunked sending - single write of 187KB causes mbedTLS panic
     http_response_t http_resp;
-    int rc = https_post_json(hostname, "/auth/verify", json_payload, &http_resp);
-    free(json_payload);
+    int rc = https_post_json_2(hostname, "/auth/verify", json_buffer, &http_resp);
 
     if (rc != 0 || !http_resp.success) {
         printf("[balvi_api] POST failed: rc=%d, status=%d\n", rc, http_resp.status_code);
+        if (http_resp.body && http_resp.body_len > 0) {
+            printf("FULL SERVER ERROR RESPONSE (%zu bytes):\n%s\n", http_resp.body_len, http_resp.body);
+        }
         if (response) response->valid = false;
         http_response_free(&http_resp);
         return -1;
     }
 
-    printf("[balvi_api] Response (%zu bytes): %s\n", http_resp.body_len, http_resp.body);
+    printf("FULL SERVER SUCCESS RESPONSE (%zu bytes):\n%s\n", http_resp.body_len, http_resp.body);
 
     // Parse JSON response
     jsmn_parser p;

@@ -30,9 +30,16 @@ kGN+hr/W5GvT1tMBjgWKZ1i4//emhA1JG1BbPzoLJQvyEotc03lXjTaCzv8mEbep\n\
 vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl\n\
 -----END CERTIFICATE-----\n"
 
+#include "psram_config.h"
+
 #define HTTP_REQUEST_BUFFER_SIZE (4 * 1024)   // 4KB for request (headers + small payload)
 #define HTTP_RESPONSE_BUFFER_SIZE (16 * 1024)  // 16KB for responses (static, no realloc)
 #define HTTP_TIMEOUT_MS 30000  // 30 second timeout
+
+// Large request buffer in PSRAM for ZKP proofs
+// Place it at SHARED_MEM_BASE (reuse shared memory after crypto is done)
+#define LARGE_REQUEST_BUFFER ((char*)SHARED_MEM_BASE)
+#define LARGE_REQUEST_BUFFER_SIZE (512 * 1024)  // 512KB
 
 // Static buffers (no malloc/free)
 static char static_request_buffer[HTTP_REQUEST_BUFFER_SIZE];
@@ -42,7 +49,7 @@ static bool http_client_busy = false;
 // State for HTTP request
 typedef struct {
     struct altcp_pcb *pcb;
-    char *request_data;          // Points to static_request_buffer
+    char *request_data;          // Points to static_request_buffer or PSRAM buffer
     size_t request_len;
     size_t request_sent;
     char *response_buffer;       // Points to static_response_buffer
@@ -104,20 +111,16 @@ static err_t http_client_sent(void *arg, struct altcp_pcb *pcb, u16_t len) {
 
     state->request_sent += len;
 
-    // Send remaining data if any
-    if (state->request_sent < state->request_len) {
-        size_t remaining = state->request_len - state->request_sent;
-        size_t to_send = remaining < 2048 ? remaining : 2048;
+    if (state->request_sent <= state->request_len) {
+        printf("[http_post] Acknowledged %u bytes, total %zu/%zu\n", len, state->request_sent, state->request_len);
+    } else {
+        printf("[http_post] WARNING: Acknowledged %u bytes, total %zu/%zu (overflow!)\n", len, state->request_sent, state->request_len);
+    }
 
-        err_t err = altcp_write(pcb, state->request_data + state->request_sent,
-                                to_send, TCP_WRITE_FLAG_COPY);
-        if (err == ERR_OK) {
-            altcp_output(pcb);
-        } else {
-            printf("[http_post] Failed to write more data: %d\n", err);
-            state->error = true;
-            state->complete = true;
-        }
+    // With large lwIP buffers, all data should be sent in http_client_connected
+    // This callback just tracks acknowledgments
+    if (state->request_sent >= state->request_len) {
+        printf("[http_post] All data acknowledged, waiting for response\n");
     }
 
     return ERR_OK;
@@ -136,9 +139,9 @@ static err_t http_client_connected(void *arg, struct altcp_pcb *pcb, err_t err) 
     printf("[http_post] Connected, sending %s request (%zu bytes)\n",
            state->is_post ? "POST" : "GET", state->request_len);
 
-    // Send request (or first chunk)
-    size_t to_send = state->request_len < 2048 ? state->request_len : 2048;
-    err = altcp_write(pcb, state->request_data, to_send, TCP_WRITE_FLAG_COPY);
+    // With increased lwIP buffers, send entire request at once
+    // lwIP will handle chunking internally
+    err = altcp_write(pcb, state->request_data, state->request_len, TCP_WRITE_FLAG_COPY);
 
     if (err != ERR_OK) {
         printf("[http_post] Failed to write request: %d\n", err);
@@ -147,6 +150,7 @@ static err_t http_client_connected(void *arg, struct altcp_pcb *pcb, err_t err) 
         return err;
     }
 
+    printf("[http_post] Request queued to lwIP send buffer\n");
     altcp_output(pcb);
     return ERR_OK;
 }
@@ -228,10 +232,32 @@ static int https_request(const char* hostname, const char* path, const char* met
     state.response_capacity = HTTP_RESPONSE_BUFFER_SIZE;
     state.response_len = 0;
 
-    // Build HTTP request in static buffer
+    // Build HTTP request
     int req_len;
+    char *request_buffer = NULL;
+    size_t buffer_size = HTTP_REQUEST_BUFFER_SIZE;
+
     if (state.is_post && json_payload) {
-        req_len = snprintf(static_request_buffer, HTTP_REQUEST_BUFFER_SIZE,
+        size_t payload_len = strlen(json_payload);
+        size_t headers_len = 200; // Approximate header size
+        size_t needed = headers_len + payload_len;
+
+        if (needed >= HTTP_REQUEST_BUFFER_SIZE) {
+            // Large request - use PSRAM static buffer
+            printf("[http_post] Large request detected (%zu bytes), using PSRAM buffer\n", needed);
+            if (needed >= LARGE_REQUEST_BUFFER_SIZE) {
+                printf("[http_post] Request too large for PSRAM buffer: %zu >= %d\n", needed, LARGE_REQUEST_BUFFER_SIZE);
+                altcp_tls_free_config(tls_config);
+                http_client_busy = false;
+                return -1;
+            }
+            request_buffer = LARGE_REQUEST_BUFFER;
+            buffer_size = LARGE_REQUEST_BUFFER_SIZE;
+        } else {
+            request_buffer = static_request_buffer;
+        }
+
+        req_len = snprintf(request_buffer, buffer_size,
             "%s %s HTTP/1.1\r\n"
             "Host: %s\r\n"
             "Content-Type: application/json\r\n"
@@ -239,9 +265,10 @@ static int https_request(const char* hostname, const char* path, const char* met
             "Connection: close\r\n"
             "\r\n"
             "%s",
-            method, path, hostname, strlen(json_payload), json_payload);
+            method, path, hostname, payload_len, json_payload);
     } else {
-        req_len = snprintf(static_request_buffer, HTTP_REQUEST_BUFFER_SIZE,
+        request_buffer = static_request_buffer;
+        req_len = snprintf(request_buffer, buffer_size,
             "%s %s HTTP/1.1\r\n"
             "Host: %s\r\n"
             "Connection: close\r\n"
@@ -249,14 +276,14 @@ static int https_request(const char* hostname, const char* path, const char* met
             method, path, hostname);
     }
 
-    if (req_len >= HTTP_REQUEST_BUFFER_SIZE) {
-        printf("[http_post] Request too large: %d >= %d\n", req_len, HTTP_REQUEST_BUFFER_SIZE);
+    if (req_len >= buffer_size) {
+        printf("[http_post] Request too large: %d >= %zu\n", req_len, buffer_size);
         altcp_tls_free_config(tls_config);
         http_client_busy = false;
         return -1;
     }
 
-    state.request_data = static_request_buffer;
+    state.request_data = request_buffer;
     state.request_len = req_len;
 
     // Create PCB
@@ -372,3 +399,358 @@ void http_response_free(http_response_t* response) {
         response->body_len = 0;
     }
 }
+
+//
+// =================================================================================
+// V2 HTTP CLIENT FOR LARGE PAYLOADS
+// =================================================================================
+//
+
+// State for V2 HTTP request
+typedef struct {
+    struct altcp_pcb *pcb;
+    // Request
+    char *request_headers;       // Buffer for headers
+    size_t headers_len;
+    size_t headers_sent;
+    const char *request_body;    // Pointer to the large payload (e.g., in PSRAM)
+    size_t body_len;
+    size_t body_queued;          // How much body data queued via altcp_write
+    size_t body_sent;            // How much body data acknowledged by remote
+    // Response
+    char *response_buffer;
+    size_t response_len;
+    size_t response_capacity;
+    // Status
+    bool complete;
+    bool error;
+    int status_code;
+    char *body_start;
+    size_t body_len_out;
+    bool is_post;
+    int last_reported_percent; // For logging
+} http_state_2_t;
+
+static err_t http_client_recv_2(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t err);
+static err_t http_client_sent_2(void *arg, struct altcp_pcb *pcb, u16_t len);
+static err_t http_client_connected_2(void *arg, struct altcp_pcb *pcb, err_t err);
+static void http_client_err_2(void *arg, err_t err);
+static err_t send_body_chunk(http_state_2_t *state);
+
+static err_t http_client_recv_2(void *arg, struct altcp_pcb *pcb, struct pbuf *p, err_t err) {
+    http_state_2_t *state = (http_state_2_t *)arg;
+
+    if (!p) {
+        printf("[http_post_v2] Connection closed\n");
+        state->complete = true;
+        return ERR_OK;
+    }
+
+    if (err != ERR_OK) {
+        printf("[http_post_v2] Receive error: %d\n", err);
+        pbuf_free(p);
+        state->error = true;
+        state->complete = true;
+        return err;
+    }
+
+    size_t needed = state->response_len + p->tot_len;
+    if (needed > state->response_capacity) {
+        printf("[http_post_v2] Response too large: %zu > %zu\n", needed, state->response_capacity);
+        pbuf_free(p);
+        state->error = true;
+        state->complete = true;
+        return ERR_MEM;
+    }
+
+    pbuf_copy_partial(p, state->response_buffer + state->response_len, p->tot_len, 0);
+    state->response_len += p->tot_len;
+
+    altcp_recved(pcb, p->tot_len);
+    pbuf_free(p);
+
+    return ERR_OK;
+}
+
+static err_t send_body_chunk(http_state_2_t *state) {
+    struct altcp_pcb *pcb = state->pcb;
+    err_t err = ERR_OK;
+
+    while (state->body_queued < state->body_len) {
+        size_t remaining = state->body_len - state->body_queued;
+        u16_t available_space = altcp_sndbuf(pcb);
+
+        if (available_space == 0) {
+            // Wait for sent callback to free up space
+            break;
+        }
+
+        u16_t chunk_size = remaining > available_space ? available_space : remaining;
+
+        u16_t mss = altcp_mss(pcb);
+        if (chunk_size > mss) {
+            chunk_size = mss;
+        }
+
+        // Use COPY as NOCOPY is not available in this lwIP port
+        err = altcp_write(pcb, state->request_body + state->body_queued, chunk_size, TCP_WRITE_FLAG_COPY | TCP_WRITE_FLAG_MORE);
+
+        if (err == ERR_OK) {
+            state->body_queued += chunk_size;
+
+        } else if (err == ERR_MEM) {
+            // Not a fatal error, just need to wait
+            err = ERR_OK;
+            break;
+        } else {
+            printf("[http_post_v2] altcp_write failed with error: %d\n", err);
+            state->error = true;
+            state->complete = true;
+            return err;
+        }
+    }
+
+    if (err == ERR_OK) {
+        altcp_output(pcb);
+    }
+
+    if (state->body_queued >= state->body_len) {
+        printf("[http_post_v2] All body data queued (%zu bytes)\n", state->body_queued);
+    }
+
+    return err;
+}
+
+
+static err_t http_client_sent_2(void *arg, struct altcp_pcb *pcb, u16_t len) {
+    http_state_2_t *state = (http_state_2_t *)arg;
+
+    if (state->headers_sent < state->headers_len) {
+        // Acknowledgment is for headers
+        u16_t header_ack = len;
+        if (state->headers_sent + len > state->headers_len) {
+            // Partial ack: some is headers, some is body
+            header_ack = state->headers_len - state->headers_sent;
+        }
+        state->headers_sent += header_ack;
+        len -= header_ack;  // Remaining is body ack
+    }
+
+    // Any remaining acknowledgment is for body
+    if (len > 0 && state->headers_sent >= state->headers_len) {
+        state->body_sent += len;
+
+        // Report progress based on acknowledged data
+        if (state->body_len > 0) {
+            int current_percent = (state->body_sent * 100) / state->body_len;
+            if (current_percent >= state->last_reported_percent + 10) {
+                printf("[http_post_v2] Uploaded... %d%% (%zu/%zu bytes)\n",
+                       current_percent, state->body_sent, state->body_len);
+                state->last_reported_percent = current_percent;
+            }
+        }
+
+        if (state->body_sent >= state->body_len) {
+            printf("[http_post_v2] All body data acknowledged (%zu bytes)\n", state->body_sent);
+        }
+    }
+
+    // If headers are fully sent, try queuing more body chunks
+    if (state->headers_sent >= state->headers_len) {
+        if (state->body_queued == 0 && state->last_reported_percent == 0) {
+            // Print 0% once when starting body upload
+            printf("[http_post_v2] Uploading... 0%%\n");
+            state->last_reported_percent = 1; // Use 1 to prevent re-printing 0%
+        }
+        if (state->body_queued < state->body_len) {
+            return send_body_chunk(state);
+        }
+    }
+
+    return ERR_OK;
+}
+
+static err_t http_client_connected_2(void *arg, struct altcp_pcb *pcb, err_t err) {
+    http_state_2_t *state = (http_state_2_t *)arg;
+
+    if (err != ERR_OK) {
+        printf("[http_post_v2] Connection failed: %d\n", err);
+        state->error = true;
+        state->complete = true;
+        return err;
+    }
+
+    printf("[http_post_v2] Connected, sending headers (%zu bytes)\n", state->headers_len);
+
+    // Send headers only
+    err = altcp_write(pcb, state->request_headers, state->headers_len, TCP_WRITE_FLAG_COPY | TCP_WRITE_FLAG_MORE);
+
+    if (err != ERR_OK) {
+        printf("[http_post_v2] Failed to write headers: %d\n", err);
+        state->error = true;
+        state->complete = true;
+        return err;
+    }
+    
+    // The rest of the request (the body) will be sent in the 'sent' callback
+    altcp_output(pcb);
+    return ERR_OK;
+}
+
+static void http_client_err_2(void *arg, err_t err) {
+    http_state_2_t *state = (http_state_2_t *)arg;
+    printf("[http_post_v2] Connection error: %d\n", err);
+    state->error = true;
+    state->complete = true;
+}
+
+static int parse_http_response_2(http_state_2_t *state) {
+    if (state->response_len == 0) return -1;
+    if (state->response_len < state->response_capacity) {
+        state->response_buffer[state->response_len] = '\0';
+    }
+    char *status_line = state->response_buffer;
+    char *line_end = strstr(status_line, "\r\n");
+    if (!line_end) return -1;
+    char *status_start = strchr(status_line, ' ');
+    if (status_start) {
+        state->status_code = atoi(status_start + 1);
+    }
+    char *body_start = strstr(state->response_buffer, "\r\n\r\n");
+    if (body_start) {
+        state->body_start = body_start + 4;
+        state->body_len_out = state->response_len - (state->body_start - state->response_buffer);
+    } else {
+        state->body_start = NULL;
+        state->body_len_out = 0;
+    }
+    return 0;
+}
+
+static int https_request_2(const char* hostname, const char* path, const char* method,
+                         const char* json_payload, http_response_t* response) {
+    printf("[http_post_v2] Starting %s request to %s%s\n", method, hostname, path);
+
+    if (http_client_busy) {
+        printf("[http_post_v2] Client busy\n");
+        return -1;
+    }
+    http_client_busy = true;
+
+    static const uint8_t cert[] = GTS_ROOT_CERT;
+    struct altcp_tls_config *tls_config = altcp_tls_create_config_client(cert, sizeof(cert));
+    if (!tls_config) {
+        http_client_busy = false;
+        return -1;
+    }
+
+    static http_state_2_t state;
+    memset(&state, 0, sizeof(state));
+
+    state.is_post = (strcmp(method, "POST") == 0);
+    state.response_buffer = static_response_buffer;
+    state.response_capacity = HTTP_RESPONSE_BUFFER_SIZE;
+
+    // Build headers only
+    state.request_headers = static_request_buffer;
+    size_t payload_len = state.is_post ? strlen(json_payload) : 0;
+
+    printf("[http_post_v2] Content-Length will be: %zu\n", payload_len);
+
+    state.headers_len = snprintf(state.request_headers, HTTP_REQUEST_BUFFER_SIZE,
+        "%s %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "Content-Type: application/json\r\n"
+        "Content-Length: %zu\r\n"
+        "Connection: close\r\n"
+        "\r\n",
+        method, path, hostname, payload_len);
+
+    if (state.headers_len >= HTTP_REQUEST_BUFFER_SIZE) {
+        printf("[http_post_v2] Headers too large\n");
+        altcp_tls_free_config(tls_config);
+        http_client_busy = false;
+        return -1;
+    }
+
+    if (state.is_post) {
+        state.request_body = json_payload;
+        state.body_len = payload_len;
+    }
+
+    state.pcb = altcp_tls_new(tls_config, IPADDR_TYPE_ANY);
+    if (!state.pcb) {
+        altcp_tls_free_config(tls_config);
+        http_client_busy = false;
+        return -1;
+    }
+
+    mbedtls_ssl_set_hostname(altcp_tls_context(state.pcb), hostname);
+    altcp_arg(state.pcb, &state);
+    altcp_recv(state.pcb, http_client_recv_2);
+    altcp_sent(state.pcb, http_client_sent_2);
+    altcp_err(state.pcb, http_client_err_2);
+
+    ip_addr_t server_ip;
+    err_t err = dns_gethostbyname(hostname, &server_ip, NULL, NULL);
+    int timeout = 100;
+    while (err == ERR_INPROGRESS && timeout-- > 0) {
+        cyw43_arch_poll();
+        sleep_ms(100);
+        err = dns_gethostbyname(hostname, &server_ip, NULL, NULL);
+    }
+
+    if (err != ERR_OK) {
+        altcp_close(state.pcb);
+        altcp_tls_free_config(tls_config);
+        http_client_busy = false;
+        return -1;
+    }
+
+    err = altcp_connect(state.pcb, &server_ip, 443, http_client_connected_2);
+    if (err != ERR_OK) {
+        altcp_close(state.pcb);
+        altcp_tls_free_config(tls_config);
+        http_client_busy = false;
+        return -1;
+    }
+
+    timeout = HTTP_TIMEOUT_MS / 100;
+    while (!state.complete && timeout-- > 0) {
+        cyw43_arch_poll();
+        sleep_ms(100);
+    }
+
+    if (!state.complete) {
+        printf("[http_post_v2] Request timeout\n");
+        altcp_abort(state.pcb); // Use abort for forceful close on timeout
+        altcp_tls_free_config(tls_config);
+        http_client_busy = false;
+        return -1;
+    }
+
+    int result = -1;
+    if (!state.error && parse_http_response_2(&state) == 0) {
+        response->status_code = state.status_code;
+        response->success = (state.status_code >= 200 && state.status_code < 300);
+        if (state.body_len_out > 0) {
+            response->body = state.body_start;
+            response->body_len = state.body_len_out;
+        }
+        result = 0;
+    }
+
+    if (state.pcb) {
+        altcp_close(state.pcb);
+    }
+    altcp_tls_free_config(tls_config);
+    http_client_busy = false;
+
+    return result;
+}
+
+int https_post_json_2(const char* hostname, const char* path, const char* json_payload, http_response_t* response) {
+    memset(response, 0, sizeof(http_response_t));
+    return https_request_2(hostname, path, "POST", json_payload, response);
+}
+

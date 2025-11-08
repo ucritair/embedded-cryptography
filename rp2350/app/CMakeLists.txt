@@ -16,6 +16,7 @@ add_executable(pico_project
     # Crypto Ops
     # TODO: Improve name
     crypto/battery_e2e.c
+    crypto/crypto_shared.c
 )
 
 target_include_directories(pico_project PUBLIC

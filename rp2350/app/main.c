@@ -21,6 +21,15 @@
 #include "lwip/apps/sntp.h"
 #include <time.h>
 
+#include "pico/multicore.h"
+#include "psram_config.h"
+#include "crypto_shared.h"
+#include "mbedtls/base64.h"
+
+// Rust FFI
+#include "include/battery.h"
+#include "battery_e2e.h"
+
 // Global variables for WiFi credentials
 static char wifi_ssid[MAX_SSID_LEN + 1];
 static char wifi_password[MAX_PASSWORD_LEN + 1];
@@ -85,7 +94,7 @@ int _gettimeofday(struct timeval *tv, void *tz) {
 #define CRYPTO_TASK_PRIORITY    ( tskIDLE_PRIORITY + 2UL )
 
 // Task stack sizes
-#define MAIN_TASK_STACK_SIZE 1024
+#define MAIN_TASK_STACK_SIZE 4096
 #define CRYPTO_TASK_STACK_SIZE 2048
 
 static bool connect_to_wifi(uint8_t auth_mode)
@@ -350,71 +359,363 @@ TF_Result reboot_to_bootloader_listener(TinyFrame *tf, TF_Msg *msg)
     return TF_STAY;
 }
 
-#include "hardware/xip_cache.h"
-#include "hardware/regs/addressmap.h"
-#include "hardware/regs/qmi.h"
-#include "hardware/regs/xip.h"
-#include "hardware/structs/xip_ctrl.h"
-#include "hardware/structs/qmi.h"
-#include "hardware/structs/xip_ctrl.h"
+/**
+ * Send ZKP authentication status update to host (unsolicited message)
+ */
+void send_zkp_auth_status(uint8_t stage, uint8_t progress, const char* message) {
+    static msg_payload_zkp_auth_status_t status;
+    memset(&status, 0, sizeof(status));
 
-#include "pico/multicore.h"
+    status.stage = stage;
+    status.progress = progress;
+    strncpy(status.message, message, MAX_STATUS_MESSAGE_LEN - 1);
+    status.message[MAX_STATUS_MESSAGE_LEN - 1] = '\0';
 
-// Base address of the PSRAM/Flash mapped in XIP (cached)
-// 0x15000000 for uncached
-#define PSRAM_BASE_ADDRESS   0x11000000
-#define UCPSRAM_BASE_ADDRESS 0x15000000
+    TF_Msg msg;
+    TF_ClearMsg(&msg);
+    msg.type = MSG_TYPE_ZKP_AUTH_STATUS;
+    msg.data = (const uint8_t*)&status;
+    msg.len = sizeof(status);
+    TF_Send(tf, &msg);
 
-// Size of the PSRAM (8 MB = 8 * 1024 * 1024 bytes)
-#define PSRAM_SIZE_BYTES (8 * 1024 * 1024)
-
-
-// last address of PSRAM
-#define PSRAM_TOP (PSRAM_BASE_ADDRESS + (PSRAM_SIZE_BYTES - 1))
-
-
-// PSRA alternate stack size (1MB)
-#define PSRAM_STACK_SIZE (1 * 1024 * 1024)
-
-// PSRAM alternate stack bottom address
-#define PSRAM_STACK_BOT (PSRAM_TOP + 1) - PSRAM_STACK_SIZE
-
-// RP2350B pin 58 is GPIO 47
-// GPIO 47 as CS
-#define PSRAM_CS_PIN 47
-
-uint8_t* psram = (uint8_t*)PSRAM_BASE_ADDRESS;
-uint8_t* uc_psram = (uint8_t*)UCPSRAM_BASE_ADDRESS;
-
-void init_psram()
-{
-	gpio_set_function(PSRAM_CS_PIN, GPIO_FUNC_XIP_CS1); // Set GPIO 47 as CS pin
-	xip_ctrl_hw->ctrl |= XIP_CTRL_WRITABLE_M1_BITS;     // Configure XIP controller for writable M1 region
+    // Small delay to ensure message is sent before next operation
+    vTaskDelay(pdMS_TO_TICKS(10));
 }
 
-// rust FFI
-#include "include/battery.h"
-#include "battery_e2e.h"
-
-void core1_battery_e2e ()
+/**
+ * Listener for ZKP authentication request (type MSG_TYPE_ZKP_AUTHENTICATE)
+ * This is a blocking operation that performs the full authentication flow
+ */
+TF_Result zkp_authenticate_listener(TinyFrame *tf, TF_Msg *msg)
 {
-	battery_e2e();
-    // zkp_auth_demo();
+    printf("Received ZKP authentication request\n");
 
-	printf(">>> CORE1 DONE, SPINNING <<<\n");
-	while ( true )
-	{
-		sleep_ms(1000);
+    static msg_payload_zkp_authenticate_response_t response;
+    memset(&response, 0, sizeof(response));
+
+    // Perform full authentication flow (blocking)
+    // This will take several minutes due to proof generation on Core1
+    printf("[ZKP Auth] Starting authentication flow (this will take ~10 minutes)...\n");
+
+    static auth_verify_response_t auth_result = {0};
+    memset(&auth_result, 0, sizeof(auth_result));
+    int rc = perform_zkp_authentication("air.gp.xyz", &auth_result);
+
+    if (rc == 0 && auth_result.valid) {
+        // Success - copy token and expiry to response
+        response.success = 1;
+        strncpy(response.access_token, auth_result.access_token, MAX_ACCESS_TOKEN_LEN - 1);
+        response.access_token[MAX_ACCESS_TOKEN_LEN - 1] = '\0';
+        strncpy(response.expires_at, auth_result.expires_at, MAX_TIMESTAMP_LEN - 1);
+        response.expires_at[MAX_TIMESTAMP_LEN - 1] = '\0';
+
+        printf("[ZKP Auth] Authentication successful\n");
+        printf("[ZKP Auth] Access Token: %.32s...\n", response.access_token);
+        printf("[ZKP Auth] Expires at: %s\n", response.expires_at);
+    } else {
+        // Failure
+        response.success = 0;
+        response.access_token[0] = '\0';
+        response.expires_at[0] = '\0';
+
+        printf("[ZKP Auth] Authentication failed with error code: %d\n", rc);
+    }
+
+    // Send response
+    msg->data = (const uint8_t *)&response;
+    msg->len = sizeof(response);
+    TF_Respond(tf, msg);
+
+    return TF_STAY;
+}
+
+// Compute parent commitment on Core1 and return it to Core0
+int compute_parent_on_core1(uint8_t* parent_out) {
+	printf("[Core0] Starting Core1 to compute parent commitment\n");
+
+	// Initialize pointer to shared memory
+	if (crypto_shared == NULL) {
+		crypto_shared = (crypto_shared_t*)CRYPTO_SHARED_ADDR;
 	}
-}
 
-void do_crypto_ops(void) {
-	printf("Doing Crypto on Core 1. [PSRAM_STACK_BOT: 0x%x] [PSRAM_STACK_SIZE: 0x%x]...\n", PSRAM_STACK_BOT, PSRAM_STACK_SIZE);
+	// Initialize shared memory
+	memset(crypto_shared, 0, sizeof(crypto_shared_t));
+	crypto_shared->compute_done = false;
+	crypto_shared->error_code = 0;
+
+	// Stop Core1 if running
 	multicore_reset_core1();
 
-	// FIXME: we are only doing this to quickly change the stack location to PSRAM
-	//	instead implement a stack pointer and restore so this can be run on core0 and free up core1
-	multicore_launch_core1_with_stack(core1_battery_e2e, (uint32_t *)PSRAM_STACK_BOT, PSRAM_STACK_SIZE);
+	// Launch Core1 with PSRAM stack to run parent computation
+	multicore_launch_core1_with_stack(core1_compute_parent_entry, (uint32_t *)PSRAM_STACK_BOT, PSRAM_STACK_SIZE);
+
+	// Wait for Core1 to complete (poll the done flag)
+	printf("[Core0] Waiting for Core1 to complete...\n");
+	int timeout = 100; // 10 seconds
+	while (!crypto_shared->compute_done && timeout-- > 0) {
+		sleep_ms(100);
+	}
+
+	if (!crypto_shared->compute_done) {
+		printf("[Core0] Timeout waiting for Core1\n");
+		multicore_reset_core1();
+		return -1;
+	}
+
+	if (crypto_shared->error_code != 0) {
+		printf("[Core0] Core1 returned error: %d\n", crypto_shared->error_code);
+		multicore_reset_core1();
+		return crypto_shared->error_code;
+	}
+
+	// Copy parent from shared memory
+	memcpy(parent_out, crypto_shared->parent, 32);
+
+	printf("[Core0] Parent computation successful\n");
+
+	// Stop Core1
+	multicore_reset_core1();
+
+	return 0;
+}
+
+// Generate ZKP proof on Core1
+// witness_b64 and nonce_b64 should be base64 encoded strings
+// proof_out should point to a buffer (can be static/global on Core0)
+int generate_proof_on_core1(const char* witness_b64, const char* nonce_b64, uint8_t** proof_out, size_t* proof_len) {
+	uint32_t start_time = to_ms_since_boot(get_absolute_time());
+	printf("[Core0] [%u ms] Starting Core1 to generate ZKP proof\n", start_time);
+
+	// Initialize pointer to shared memory
+	if (crypto_shared == NULL) {
+		crypto_shared = (crypto_shared_t*)CRYPTO_SHARED_ADDR;
+	}
+
+	// Initialize shared memory
+	memset(crypto_shared, 0, sizeof(crypto_shared_t));
+	crypto_shared->compute_done = false;
+	crypto_shared->error_code = 0;
+
+	// Copy witness and nonce to shared memory (avoid stack on Core0)
+	strncpy(crypto_shared->witness_b64, witness_b64, sizeof(crypto_shared->witness_b64) - 1);
+	strncpy(crypto_shared->nonce_b64, nonce_b64, sizeof(crypto_shared->nonce_b64) - 1);
+
+	// Stop Core1 if running
+	multicore_reset_core1();
+
+	// Launch Core1 with PSRAM stack to run proof generation
+	uint32_t launch_time = to_ms_since_boot(get_absolute_time());
+	multicore_launch_core1_with_stack(core1_generate_proof_entry, (uint32_t *)PSRAM_STACK_BOT, PSRAM_STACK_SIZE);
+
+	// Wait for Core1 to complete (proof generation can take several minutes!)
+	printf("[Core0] [%u ms] Waiting for Core1 to complete proof generation...\n", launch_time);
+	int timeout = 6000; // 600 seconds = 10 minutes
+	while (!crypto_shared->compute_done && timeout-- > 0) {
+		sleep_ms(100);
+	}
+
+	uint32_t complete_time = to_ms_since_boot(get_absolute_time());
+
+	if (!crypto_shared->compute_done) {
+		printf("[Core0] [%u ms] Timeout waiting for Core1\n", complete_time);
+		multicore_reset_core1();
+		return -1;
+	}
+
+	if (crypto_shared->error_code != 0) {
+		printf("[Core0] [%u ms] Core1 returned error: %d\n", complete_time, crypto_shared->error_code);
+		multicore_reset_core1();
+		return crypto_shared->error_code;
+	}
+
+	// Return pointer to proof in shared memory (avoid copying large proof)
+	*proof_out = crypto_shared->proof;
+	*proof_len = crypto_shared->proof_len;
+
+	uint32_t elapsed = complete_time - start_time;
+	printf("[Core0] [%u ms] Proof generation successful: %zu bytes (took %u ms = %.1f seconds)\n",
+	       complete_time, *proof_len, elapsed, elapsed / 1000.0);
+
+	// Stop Core1
+	multicore_reset_core1();
+
+	return 0;
+}
+
+// Perform full ZKP authentication flow
+// Returns: 0 on success, negative on error
+// Outputs: auth_response structure with access token
+int perform_zkp_authentication(const char* hostname, auth_verify_response_t* auth_response) {
+    if (hostname == NULL || auth_response == NULL) {
+        return -1;
+    }
+
+    int rc;  // Declare rc for HTTP tests
+
+    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    /////////////////// GET NONCE /////////////////////////////
+    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    printf("\n=== Getting Nonce from Server ===\n");
+    send_zkp_auth_status(ZKP_STAGE_NONCE, 0, "Getting nonce from server...");
+
+    static nonce_response_t nonce_response = {0};
+    memset(&nonce_response, 0, sizeof(nonce_response));
+    rc = balvi_api_get_nonce("air.gp.xyz", &nonce_response);
+
+    if (rc == 0 && nonce_response.valid) {
+        printf("Nonce retrieved successfully!\n");
+        printf("  Nonce: %s\n", nonce_response.nonce);
+        printf("  Expires at: %s\n", nonce_response.expires_at);
+        send_zkp_auth_status(ZKP_STAGE_NONCE, 100, "Nonce received");
+    } else {
+        printf("Failed to get nonce from server\n");
+        send_zkp_auth_status(ZKP_STAGE_NONCE, 0, "Failed to get nonce");
+        return -1;
+    }
+
+    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    /////////////////// COMPUTE PARENT & GET WITNESS //////////
+    ///////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////
+    printf("\n=== STAGE 2: Computing Parent Commitment on Core1 ===\n");
+    send_zkp_auth_status(ZKP_STAGE_PARENT, 0, "Computing parent commitment...");
+
+    uint8_t parent[32];
+    rc = compute_parent_on_core1(parent);
+    if (rc != 0) {
+        printf("[Core0] Parent computation failed: %d\n", rc);
+        send_zkp_auth_status(ZKP_STAGE_PARENT, 0, "Parent computation failed");
+        return -2;
+    }
+
+    send_zkp_auth_status(ZKP_STAGE_PARENT, 100, "Parent commitment computed");
+
+    printf("PARENT (binary hex):");
+    for (int i = 0; i < 32; i++) {
+        if (i % 16 == 0) printf("\n");
+        printf("%02x ", parent[i]);
+    }
+    printf("\n");
+
+    // Encode parent as base64 for server request
+    char parent_b64[64];
+    size_t parent_b64_len = 0;
+    int ret = mbedtls_base64_encode(
+        (unsigned char*)parent_b64,
+        sizeof(parent_b64),
+        &parent_b64_len,
+        parent,
+        32
+    );
+
+    if (ret != 0) {
+        printf("[Core0] Base64 encode failed: %d\n", ret);
+        return -3;
+    }
+
+    parent_b64[parent_b64_len] = '\0';
+    printf("PARENT (base64): %s\n", parent_b64);
+    printf("PARENT (base64) LENGTH: %zu\n", parent_b64_len);
+
+    // Fetch witness from server using parent commitment
+    printf("\n=== STAGE 3: Fetching Witness from Server ===\n");
+    printf("SENDING TO SERVER - Parent commitment: %s\n", parent_b64);
+    send_zkp_auth_status(ZKP_STAGE_WITNESS, 0, "Requesting Merkle witness from server...");
+
+    static witness_response_t witness_response = {0};
+    memset(&witness_response, 0, sizeof(witness_response));
+    rc = balvi_api_get_witness(hostname, parent_b64, &witness_response);
+
+    if (rc == 0 && witness_response.valid) {
+        printf("RECEIVED FROM SERVER:\n");
+        printf("ROOT (base64): %s\n", witness_response.root_b64);
+        printf("ROOT LENGTH: %zu\n", strlen(witness_response.root_b64));
+        printf("WITNESS (base64): %s\n", witness_response.witness_b64);
+        printf("WITNESS LENGTH: %zu\n", strlen(witness_response.witness_b64));
+        send_zkp_auth_status(ZKP_STAGE_WITNESS, 100, "Merkle witness received");
+
+        ///////////////////////////////////////////////////////////
+        /////////////////// GENERATE PROOF & AUTHENTICATE /////////
+        ///////////////////////////////////////////////////////////
+        printf("\n=== STAGE 4: Generating ZKP Proof on Core1 ===\n");
+        printf("INPUTS TO PROOF GENERATION:\n");
+        printf("WITNESS (base64): %s\n", witness_response.witness_b64);
+        printf("NONCE (base64): %s\n", nonce_response.nonce);
+        send_zkp_auth_status(ZKP_STAGE_PROOF, 0, "Generating ZKP proof (~10 minutes)...");
+
+        uint8_t* proof_ptr = NULL;
+        size_t proof_len = 0;
+        rc = generate_proof_on_core1(witness_response.witness_b64, nonce_response.nonce, &proof_ptr, &proof_len);
+        if (rc != 0 || proof_ptr == NULL) {
+            printf("[Core0] Proof generation failed: %d\n", rc);
+            send_zkp_auth_status(ZKP_STAGE_PROOF, 0, "Proof generation failed");
+            return -4;
+        }
+
+        send_zkp_auth_status(ZKP_STAGE_PROOF, 100, "ZKP proof generated successfully");
+
+        // Encode proof as base64 for server
+        // Use dedicated proof_b64 buffer in shared memory
+        printf("[Core0] Encoding proof to base64...\n");
+        crypto_shared->proof_b64_len = 0;
+
+        int ret = mbedtls_base64_encode(
+            (unsigned char*)crypto_shared->proof_b64,
+            sizeof(crypto_shared->proof_b64),
+            &crypto_shared->proof_b64_len,
+            proof_ptr,
+            proof_len
+        );
+
+        if (ret != 0) {
+            printf("[Core0] Failed to encode proof to base64: %d\n", ret);
+            return -5;
+        }
+
+        crypto_shared->proof_b64[crypto_shared->proof_b64_len] = '\0';
+        printf("PROOF (base64) LENGTH: %zu chars\n", crypto_shared->proof_b64_len);
+
+        // Authenticate with server
+        printf("\n=== STAGE 5: Authenticating with Server ===\n");
+        printf("INPUTS TO AUTHENTICATION:\n");
+        printf("NONCE (base64): %s\n", nonce_response.nonce);
+        send_zkp_auth_status(ZKP_STAGE_VERIFY, 0, "Submitting proof for verification...");
+
+        // Print only first 100 and last 100 bytes of proof bundle
+        if (crypto_shared->proof_b64_len <= 200) {
+            printf("PROOF_BUNDLE (base64): %s\n", crypto_shared->proof_b64);
+        } else {
+            printf("PROOF_BUNDLE (base64, first 100 chars): %.100s\n", crypto_shared->proof_b64);
+            printf("...\n");
+            printf("PROOF_BUNDLE (base64, last 100 chars): %s\n",
+                   crypto_shared->proof_b64 + crypto_shared->proof_b64_len - 100);
+        }
+
+        rc = balvi_api_verify_proof(hostname, nonce_response.nonce, crypto_shared->proof_b64, auth_response);
+
+        if (rc == 0 && auth_response->valid) {
+            printf("*** AUTHENTICATION SUCCESSFUL! ***\n");
+            printf("  Access Token: %.32s...\n", auth_response->access_token);
+            printf("  Expires at: %s\n", auth_response->expires_at);
+            send_zkp_auth_status(ZKP_STAGE_VERIFY, 100, "Authentication successful!");
+            return 0; // Success
+        } else {
+            printf("Authentication failed\n");
+            send_zkp_auth_status(ZKP_STAGE_VERIFY, 0, "Authentication verification failed");
+            return -6;
+        }
+    } else {
+        printf("Failed to get witness from server\n");
+        send_zkp_auth_status(ZKP_STAGE_WITNESS, 0, "Failed to get witness from server");
+        return -7;
+    }
 }
 
 void main_task(__unused void *params) {
@@ -433,7 +734,15 @@ void main_task(__unused void *params) {
     printf("battery_api_version(): 0x%X\n", battery_api_version());
 
     init_psram();
-    rust_heap_init(PSRAM_BASE_ADDRESS, PSRAM_SIZE_BYTES);
+    rust_heap_init(RUST_HEAP_BASE, RUST_HEAP_SIZE);
+
+    printf("PSRAM Memory Layout:\n");
+    printf("  Rust Heap:   0x%08X - 0x%08X (%d MB)\n",
+           RUST_HEAP_BASE, RUST_HEAP_BASE + RUST_HEAP_SIZE - 1, RUST_HEAP_SIZE / (1024*1024));
+    printf("  Shared Mem:  0x%08X - 0x%08X (%d MB)\n",
+           SHARED_MEM_BASE, SHARED_MEM_BASE + SHARED_MEM_SIZE - 1, SHARED_MEM_SIZE / (1024*1024));
+    printf("  Core1 Stack: 0x%08X - 0x%08X (%d MB)\n",
+           PSRAM_STACK_BOT, PSRAM_STACK_TOP, PSRAM_STACK_SIZE / (1024*1024));
 
     if (cyw43_arch_init()) {
         printf("failed to initialise cyw43_arch\n");
@@ -450,7 +759,9 @@ void main_task(__unused void *params) {
     TF_AddTypeListener(tf, MSG_TYPE_SENSOR_DATA, sensor_data_listener);
     TF_AddTypeListener(tf, MSG_TYPE_WIFI_SCAN_REQUEST, wifi_scan_listener);
     TF_AddTypeListener(tf, MSG_TYPE_REBOOT_TO_BOOTLOADER, reboot_to_bootloader_listener);
+    TF_AddTypeListener(tf, MSG_TYPE_ZKP_AUTHENTICATE, zkp_authenticate_listener);
 
+    printf("[RP2350]: Listening for UART Messages\n");
     while (true) {
         // TinyFrame processing
         while (uart_is_readable(uart0)) {
