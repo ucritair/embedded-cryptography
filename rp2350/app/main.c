@@ -448,24 +448,6 @@ void main_task(__unused void *params) {
     TF_AddTypeListener(tf, MSG_TYPE_WIFI_SCAN_REQUEST, wifi_scan_listener);
     TF_AddTypeListener(tf, MSG_TYPE_REBOOT_TO_BOOTLOADER, reboot_to_bootloader_listener);
 
-    // TEMPORARY CODE: Connect to WiFi and talk to Balvi server
-    strncpy(wifi_ssid, "Zaviyar-Home-2G", MAX_SSID_LEN);
-    wifi_ssid[MAX_SSID_LEN] = '\0';
-    strncpy(wifi_password, "ZaviyarWasim", MAX_PASSWORD_LEN);
-    wifi_password[MAX_PASSWORD_LEN] = '\0';
-
-    printf("Connecting to WiFi (hardcoded credentials)...\n");
-    if (connect_to_wifi(WIFI_AUTH_WPA2)) {
-        printf("Connected! Talking to Balvi server...\n");
-        sntp_init_func();
-        balvi_api_health_check("air.gp.xyz");
-        printf("Getting configuration...\n");
-        balvi_api_get_config("air.gp.xyz");
-    } else {
-        printf("Failed to connect to WiFi with hardcoded credentials\n");
-    }
-
-    int i = 0;
     while (true) {
         // TinyFrame processing
         while (uart_is_readable(uart0)) {
@@ -485,23 +467,6 @@ void main_task(__unused void *params) {
             case APP_STATE_WIFI_CONNECTED:
                 // no-op for now..
                 break;
-        }
-
-        if (i == 0) {
-            printf("Running Crypto Test \n");
-            do_crypto_ops();
-        }
-
-        if (i++ % 10000 == 0) {
-            time_t now = time(NULL);
-            struct tm *utc = gmtime(&now);
-            if (utc->tm_year > (2000 - 1900)) { // Check if time is likely synchronized
-                char buf[48];
-                strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", utc);
-                printf("Current time: %s\n", buf);
-            } else {
-                printf("Time not yet synchronized.\n");
-            }
         }
 
         vTaskDelay(1);

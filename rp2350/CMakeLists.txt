@@ -31,3 +31,10 @@ target_include_directories(tinyframe PUBLIC
 
 # Add the subdirectory for our project
 add_subdirectory(app)
+
+# Pass firmware version to the compiler
+target_compile_definitions(pico_project PRIVATE
+    FIRMWARE_VERSION_MAJOR=${FIRMWARE_VERSION_MAJOR}
+    FIRMWARE_VERSION_MINOR=${FIRMWARE_VERSION_MINOR}
+    FIRMWARE_VERSION_PATCH=${FIRMWARE_VERSION_PATCH}
+)

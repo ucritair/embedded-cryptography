@@ -9,9 +9,7 @@
 #define PROTOCOL_VERSION_PATCH 0
 
 // --- Firmware Version ---
-#define FIRMWARE_VERSION_MAJOR 1
-#define FIRMWARE_VERSION_MINOR 0
-#define FIRMWARE_VERSION_PATCH 0
+// These are now defined by the build system
 
 // --- Message Types ---
 // Sent from Host to Device
