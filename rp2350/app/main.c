@@ -2,6 +2,7 @@
 #include <string.h>
 #include <sys/time.h>
 #include "pico/stdlib.h"
+#include "pico/bootrom.h"
 #include "hardware/uart.h"
 #include "TinyFrame.h"
 #include "tf_port.h"

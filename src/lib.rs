@@ -9,7 +9,11 @@ extern crate alloc;
 use embedded_alloc::LlffHeap as Heap;
 
 // griffon
-// adding a GPIO so we can show error state from the rust code (LED)
+// adding a GPIO so we can show error state from the rust code (LED / drive pin high)
+//
+// (hmm... on second thought maybe convert this to an inline C function? we want the GPIO to be set
+// no matter what to indicate that rust panic'd, and we probably can't trust rust's to be
+// functioning correctly after panic'ing...)
 use rp235x_hal as _;
 
 use embedded_hal::digital::{OutputPin};
@@ -37,7 +41,8 @@ use std::vec::Vec;
 use alloc::vec::Vec;
 
 
-fn gpio_init()
+// quick and dirty debug output to indicate that rust panic'd
+fn set_panic_gpio()
 {
     let mut pac = hal::pac::Peripherals::take().unwrap();
     let sio = Sio::new(pac.SIO);
@@ -47,8 +52,8 @@ fn gpio_init()
         sio.gpio_bank0,
         &mut pac.RESETS,
     );
-    // Set a pin to drive output
-    let mut output_pin = pins.gpio23.into_push_pull_output();
+    // Set GPIO2 to GPIO output mode
+    let mut output_pin = pins.gpio2.into_push_pull_output();
 
     output_pin.set_high().unwrap();
 }
@@ -60,8 +65,10 @@ fn gpio_init()
 #[cfg(not(feature = "std"))]
 #[panic_handler]
 fn panic_handler(_: &core::panic::PanicInfo) -> ! {
-    // set board LED to indicate we entered the rust panic_handler
-    gpio_init();
+    // set GPIO to indicate we entered the rust panic_handler
+    set_panic_gpio();
+
+    // XXX: maybe set something in shared memory to let anything left running that we just panic'd
     loop {}
 }
 
