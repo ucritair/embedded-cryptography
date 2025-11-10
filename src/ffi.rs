@@ -1,5 +1,4 @@
 use super::Vec;
-use crate::aes_ctr::aes_ctr_encrypt_in_place;
 use crate::poly::Poly;
 use crate::tfhe::encode_bits_as_trlwe_plaintext;
 use crate::tfhe::{TFHEPublicKey, TRLWECiphertext};
@@ -11,11 +10,10 @@ use p3_field::integers::QuotientMap;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 
-
 // Public constants for FFI
-pub const TFHE_TRLWE_N: usize = 1024;
-const Q: u64 = 1 << 50;
-const ERR_B: u64 = 1 << 12;
+pub const TFHE_TRLWE_N: usize = 1 << 9;
+pub const Q: u64 = 1 << 50;
+pub const ERR_B: u64 = 250;
 
 // Unified FFI status and size constants (project‑wide)
 pub const BATTERY_OK: i32 = 0;
@@ -27,46 +25,12 @@ pub const BATTERY_ERR_BUFSZ: i32 = -10; // output buffer too small
 
 pub const BATTERY_SEED_LEN: usize = 32; // TFHE RNG seed length
 pub const BATTERY_NONCE_LEN: usize = 32; // ZKP Fiat–Shamir nonce length
-pub const AES_KEY_LEN: usize = 16;
-pub const AES_IV_LEN: usize = 16;
 
 pub const BATTERY_API_VERSION: u32 = 1;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn battery_api_version() -> u32 {
     BATTERY_API_VERSION
-}
-
-
-
-// ------------- TFHE -------------
-
-/// DEPRECATED: use `tfhe_pk_encrypt` for arbitrary-length byte payloads.
-/// This wrapper now forwards to `tfhe_pk_encrypt` with `bytes_len = AES_KEY_LEN`.
-/// Inputs/outputs are unchanged and remain opaque postcard buffers.
-#[deprecated(note = "Use tfhe_pk_encrypt for arbitrary payloads")]
-#[unsafe(no_mangle)]
-pub extern "C" fn tfhe_pk_encrypt_aes_key(
-    pk: *const u8,
-    pk_len: usize,
-    aes_key16: *const u8,
-    seed32: *const u8,
-    seed_len: usize,
-    ct_out: *mut u8,
-    ct_out_len: usize,
-    out_written: *mut usize,
-) -> i32 {
-    tfhe_pk_encrypt(
-        pk,
-        pk_len,
-        aes_key16,
-        AES_KEY_LEN,
-        seed32,
-        seed_len,
-        ct_out,
-        ct_out_len,
-        out_written,
-    )
 }
 
 /// Encrypt an arbitrary byte string by encoding its bits LSB-first into a TRLWE plaintext
@@ -120,8 +84,8 @@ pub extern "C" fn tfhe_pk_encrypt(
     );
     let out_bytes = unsafe { core::slice::from_raw_parts_mut(ct_out, ct_out_len) };
     match postcard::to_slice(&ct_obj, out_bytes) {
-        Ok(rem) => {
-            let written = ct_out_len - rem.len();
+        Ok(used) => {
+            let written = used.len();
             unsafe {
                 *out_written = written;
             }
@@ -257,7 +221,7 @@ struct OpaqueMerklePathArgs {
 /// - `proof_out`/`proof_out_len`: caller-provided buffer for postcard-serialized bundle:
 ///   (proof, public_values) where public_values = [root(8) | nonce_field(8) | hash(leaf||nonce)(8)].
 /// - `out_proof_written`: number of bytes written. If too small, returns `BATTERY_ERR_BUFSZ`.
-//
+///
 /// Serialization: postcard 1.x (stable).
 #[unsafe(no_mangle)]
 pub extern "C" fn zkp_generate_proof(
@@ -338,8 +302,8 @@ pub extern "C" fn zkp_generate_proof(
     let bundle = ZkpProofBundle(proof, public_values);
     let out_bytes = unsafe { core::slice::from_raw_parts_mut(proof_out, proof_out_len) };
     match postcard::to_slice(&bundle, out_bytes) {
-        Ok(rem) => {
-            let written = proof_out_len - rem.len();
+        Ok(used) => {
+            let written = used.len();
             unsafe {
                 *out_proof_written = written;
             }
@@ -357,35 +321,7 @@ pub extern "C" fn zkp_generate_proof(
     }
 }
 
-// ------------- AES-CTR -------------
-
-#[unsafe(no_mangle)]
-pub extern "C" fn aes_ctr_encrypt(
-    buf: *mut u8,
-    len: usize,
-    key16: *const u8,
-    key_len: usize,
-    iv16: *const u8,
-    iv_len: usize,
-) -> i32 {
-    if buf.is_null() || key16.is_null() || iv16.is_null() {
-        return BATTERY_ERR_NULL;
-    }
-    if key_len != AES_KEY_LEN || iv_len != AES_IV_LEN {
-        return BATTERY_ERR_BADLEN;
-    }
-    let slice = unsafe { core::slice::from_raw_parts_mut(buf, len) };
-    let key_slice = unsafe { core::slice::from_raw_parts(key16, AES_KEY_LEN) };
-    let iv_slice = unsafe { core::slice::from_raw_parts(iv16, AES_IV_LEN) };
-    let mut key = [0u8; AES_KEY_LEN];
-    let mut iv = [0u8; AES_IV_LEN];
-    key.copy_from_slice(key_slice);
-    iv.copy_from_slice(iv_slice);
-    aes_ctr_encrypt_in_place(&key, &iv, slice);
-    BATTERY_OK
-}
-
-/// Pack a TFHE public key from `u64[N]` arrays into a postcard-serialized opaque buffer.
+// Pack a TFHE public key from `u64[N]` arrays into a postcard-serialized opaque buffer.
 /// Serialization: postcard 1.x (stable).
 #[unsafe(no_mangle)]
 pub extern "C" fn tfhe_pack_public_key(
@@ -405,8 +341,8 @@ pub extern "C" fn tfhe_pack_public_key(
     let pk = TFHEPublicKey::<TFHE_TRLWE_N, Q> { a, b };
     let out_bytes = unsafe { core::slice::from_raw_parts_mut(out, out_len) };
     match postcard::to_slice(&pk, out_bytes) {
-        Ok(rem) => {
-            let written = out_len - rem.len();
+        Ok(used) => {
+            let written = used.len();
             unsafe {
                 *out_written = written;
             }
@@ -459,8 +395,8 @@ pub extern "C" fn zkp_pack_args(
     };
     let out_bytes = unsafe { core::slice::from_raw_parts_mut(out, out_len) };
     match postcard::to_slice(&args, out_bytes) {
-        Ok(rem) => {
-            let written = out_len - rem.len();
+        Ok(used) => {
+            let written = used.len();
             unsafe {
                 *out_written = written;
             }
@@ -496,6 +432,17 @@ mod tests {
             &mut written as *mut usize,
         );
         assert_eq!(rc, BATTERY_OK);
+        // Strict: written equals exact postcard size and bytes match
+        let a_poly = Poly::<TFHE_TRLWE_N, Q>::from_coeffs_mod_q_slice(&a);
+        let b_poly = Poly::<TFHE_TRLWE_N, Q>::from_coeffs_mod_q_slice(&b);
+        let expected_pk = TFHEPublicKey::<TFHE_TRLWE_N, Q> {
+            a: a_poly,
+            b: b_poly,
+        };
+        let expected_bytes = postcard::to_allocvec(&expected_pk).unwrap();
+        assert_eq!(written, expected_bytes.len());
+        assert_eq!(&buf[..written], expected_bytes.as_slice());
+
         let pk: TFHEPublicKey<TFHE_TRLWE_N, Q> = postcard::from_bytes(&buf[..written]).unwrap();
         for i in 0..TFHE_TRLWE_N {
             assert_eq!(pk.a.coeffs[i], 1u64 % Q);
@@ -510,15 +457,25 @@ mod tests {
         let b = Poly::<TFHE_TRLWE_N, Q>::from_coeffs_mod_q_slice(&[0u64; TFHE_TRLWE_N]);
         let pk = TFHEPublicKey::<TFHE_TRLWE_N, Q> { a, b };
         let pk_bytes = postcard::to_allocvec(&pk).unwrap();
-        let aes_key = [0u8; AES_KEY_LEN];
+        let data = [0u8; 16];
         let seed = [7u8; BATTERY_SEED_LEN];
         let mut out_written = 0usize;
         let mut dummy: u8 = 0;
+        // Compute expected serialized ciphertext size deterministically
+        let bit_len = data.len() * 8;
+        let pt_poly = encode_bits_as_trlwe_plaintext::<TFHE_TRLWE_N, Q>(&data, bit_len);
+        let mut seed_arr = [0u8; BATTERY_SEED_LEN];
+        seed_arr.copy_from_slice(&seed);
+        let mut rng = ChaCha20Rng::from_seed(seed_arr);
+        let ct_obj = TRLWECiphertext::<TFHE_TRLWE_N, Q>::encrypt_with_public_key::<_, ERR_B>(
+            &pt_poly, &pk, &mut rng,
+        );
+        let expected_len = postcard::to_allocvec(&ct_obj).unwrap().len();
         let rc = tfhe_pk_encrypt(
             pk_bytes.as_ptr(),
             pk_bytes.len(),
-            aes_key.as_ptr(),
-            AES_KEY_LEN,
+            data.as_ptr(),
+            16,
             seed.as_ptr(),
             BATTERY_SEED_LEN,
             &mut dummy as *mut u8,
@@ -526,7 +483,7 @@ mod tests {
             &mut out_written as *mut usize,
         );
         assert_eq!(rc, BATTERY_ERR_BUFSZ);
-        assert!(out_written > 0);
+        assert_eq!(out_written, expected_len);
     }
 
     #[test]
@@ -571,7 +528,34 @@ mod tests {
             &mut proof_written as *mut usize,
         );
         assert_eq!(rc2, BATTERY_ERR_BUFSZ);
-        assert!(proof_written > 0);
+        // Strict: compute expected length by locally generating the bundle
+        // Rebuild args
+        let parsed_args: OpaqueMerklePathArgs =
+            postcard::from_bytes(&args_buf[..args_len]).unwrap();
+        let levels_parent = parsed_args.neighbors8_by_level_u32.len();
+        let mut leaf = [Val::from_canonical_checked(0).unwrap(); 8];
+        let mut sibling = [Val::from_canonical_checked(0).unwrap(); 8];
+        for i in 0..8 {
+            leaf[i] = Val::from_canonical_checked(4).unwrap();
+            sibling[i] = Val::from_canonical_checked(3).unwrap();
+        }
+        let mut neighbors: Vec<([Val; 8], bool)> = Vec::with_capacity(levels_parent + 1);
+        neighbors.push((sibling, false));
+        for (lvl, neigh) in parsed_args.neighbors8_by_level_u32.iter().enumerate() {
+            let mut arr = [Val::from_canonical_checked(0).unwrap(); 8];
+            for j in 0..8 {
+                arr[j] = Val::from_canonical_checked(neigh[j]).unwrap();
+            }
+            let side = parsed_args.sides_bitflags[lvl];
+            let is_left = side == 1;
+            neighbors.push((arr, is_left));
+        }
+        let mut nonce_arr = [0u8; BATTERY_NONCE_LEN];
+        nonce_arr.copy_from_slice(&nonce);
+        let (proof, public_values) = crate::zkp::generate_proof(&leaf, &neighbors, &nonce_arr);
+        let bundle = ZkpProofBundle(proof, public_values);
+        let expected_len = postcard::to_allocvec(&bundle).unwrap().len();
+        assert_eq!(proof_written, expected_len);
     }
 
     #[test]
@@ -617,6 +601,35 @@ mod tests {
         );
         assert_eq!(rc2, BATTERY_OK);
         assert!(written > 0);
+        // Strict: recompute expected bundle and compare exact bytes and length
+        let parsed_args: OpaqueMerklePathArgs =
+            postcard::from_bytes(&args_buf[..args_len]).unwrap();
+        let levels_parent = parsed_args.neighbors8_by_level_u32.len();
+        let mut leaf = [Val::from_canonical_checked(0).unwrap(); 8];
+        let mut sibling = [Val::from_canonical_checked(0).unwrap(); 8];
+        for i in 0..8 {
+            leaf[i] = Val::from_canonical_checked(4).unwrap();
+            sibling[i] = Val::from_canonical_checked(3).unwrap();
+        }
+        let mut neighbors: Vec<([Val; 8], bool)> = Vec::with_capacity(levels_parent + 1);
+        neighbors.push((sibling, false));
+        for (lvl, neigh) in parsed_args.neighbors8_by_level_u32.iter().enumerate() {
+            let mut arr = [Val::from_canonical_checked(0).unwrap(); 8];
+            for j in 0..8 {
+                arr[j] = Val::from_canonical_checked(neigh[j]).unwrap();
+            }
+            let side = parsed_args.sides_bitflags[lvl];
+            let is_left = side == 1;
+            neighbors.push((arr, is_left));
+        }
+        let mut nonce_arr = [0u8; BATTERY_NONCE_LEN];
+        nonce_arr.copy_from_slice(&nonce);
+        let (proof_expected, public_values_expected) =
+            crate::zkp::generate_proof(&leaf, &neighbors, &nonce_arr);
+        let expected_bundle = ZkpProofBundle(proof_expected, public_values_expected);
+        let expected_bytes = postcard::to_allocvec(&expected_bundle).unwrap();
+        assert_eq!(written, expected_bytes.len());
+        assert_eq!(&out[..written], expected_bytes.as_slice());
 
         let bundle: ZkpProofBundle = postcard::from_bytes(&out[..written]).unwrap();
         // Expect exactly 3 * HASH_SIZE public values: root(8) | nonce_field(8) | hash(leaf||nonce)(8)

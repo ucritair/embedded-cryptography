@@ -179,3 +179,118 @@ B_STOP
         __wfi();
     }
 }
+
+// Core1 entry point for TFHE encryption of sensor data (5×8 encoding)
+void core1_tfhe_encrypt_sensors_entry(void) {
+    // Initialize pointer to shared memory
+    if (crypto_shared == NULL) {
+        crypto_shared = (crypto_shared_t*)CRYPTO_SHARED_ADDR;
+    }
+
+    printf("[Core1] Starting TFHE sensor encryption (5×8)\n");
+    printf("[Core1] DEBUG: Shared memory pointer: %p\n", crypto_shared);
+    printf("[Core1] DEBUG: About to set compute_done = false\n");
+
+    crypto_shared->compute_done = false;
+    crypto_shared->error_code = 0;
+
+    // Decode base64 TFHE public key
+    uint8_t pk_bytes[8192];
+    size_t pk_len = 0;
+    int ret = mbedtls_base64_decode(
+        pk_bytes,
+        sizeof(pk_bytes),
+        &pk_len,
+        (const unsigned char*)crypto_shared->tfhe_pk_b64,
+        strlen(crypto_shared->tfhe_pk_b64)
+    );
+
+    if (ret != 0) {
+        printf("[Core1] TFHE PK decode failed: %d\n", ret);
+        crypto_shared->error_code = -1;
+        crypto_shared->compute_done = true;
+        while (true) { __wfi(); }
+    }
+
+    printf("[Core1] TFHE PK decoded: %zu bytes\n", pk_len);
+
+    // Encrypt each sensor value as a full byte (8 bits), then extract individual bit ciphertexts
+    // tfhe_pk_encrypt encodes bits LSB-first, so we need to reverse bit order before encrypting
+    for (int sensor_idx = 0; sensor_idx < 5; sensor_idx++) {
+        uint32_t sensor_value = crypto_shared->sensor_values[sensor_idx];
+        printf("[Core1] Sensor %d = %u (0x%02x)\n", sensor_idx, sensor_value, sensor_value & 0xFF);
+
+        // We want MSB-first in output, but tfhe_pk_encrypt uses LSB-first encoding
+        // So we need to bit-reverse the byte before encryption
+        uint8_t byte_to_encrypt = (uint8_t)(sensor_value & 0xFF);
+
+        // Bit-reverse: swap bit 0↔7, 1↔6, 2↔5, 3↔4
+        uint8_t reversed = 0;
+        for (int i = 0; i < 8; i++) {
+            if (byte_to_encrypt & (1 << i)) {
+                reversed |= (1 << (7 - i));
+            }
+        }
+
+        printf("[Core1]   Original: 0x%02x, Reversed: 0x%02x\n", byte_to_encrypt, reversed);
+
+        // Generate random seed
+        uint8_t seed[32];
+        uint64_t rng_seed = time_us_64() + sensor_idx;
+        for (int i = 0; i < 32; i++) {
+            rng_seed = rng_seed * 1103515245 + 12345;  // LCG
+            seed[i] = (uint8_t)(rng_seed >> 8);
+        }
+
+        // Encrypt the full byte (8 bits encoded LSB-first into TRLWE)
+        uint8_t ct_bytes[8192];
+        size_t ct_written = 0;
+        ret = tfhe_pk_encrypt(
+            pk_bytes, pk_len,
+            &reversed, 1,  // Encrypt 1 byte = 8 bits
+            seed, 32,
+            ct_bytes, sizeof(ct_bytes),
+            &ct_written
+        );
+
+        if (ret != BATTERY_OK) {
+            printf("[Core1] TFHE encrypt failed: sensor=%d, err=%d\n", sensor_idx, ret);
+            crypto_shared->error_code = -2;
+            crypto_shared->compute_done = true;
+            while (true) { __wfi(); }
+        }
+
+        printf("[Core1]   Encrypted to %zu bytes\n", ct_written);
+
+        // Base64 encode the ciphertext (one ciphertext per sensor)
+        size_t b64_len = 0;
+        ret = mbedtls_base64_encode(
+            (unsigned char*)crypto_shared->ct_b64[sensor_idx],
+            sizeof(crypto_shared->ct_b64[sensor_idx]),
+            &b64_len,
+            ct_bytes,
+            ct_written
+        );
+
+        if (ret != 0) {
+            printf("[Core1] Base64 encode failed: sensor=%d, err=%d\n", sensor_idx, ret);
+            crypto_shared->error_code = -3;
+            crypto_shared->compute_done = true;
+            while (true) { __wfi(); }
+        }
+
+        crypto_shared->ct_b64[sensor_idx][b64_len] = '\0';
+        crypto_shared->ct_b64_lens[sensor_idx] = b64_len;
+
+        printf("[Core1]   Base64 encoded: %zu chars\n", b64_len);
+    }
+
+    printf("[Core1] All 5 ciphertexts generated successfully\n");
+    crypto_shared->error_code = 0;
+    crypto_shared->compute_done = true;
+
+    // Spin forever
+    while (true) {
+        __wfi();
+    }
+}

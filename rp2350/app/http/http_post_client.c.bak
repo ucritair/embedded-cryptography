@@ -670,28 +670,6 @@ static int https_request_2(const char* hostname, const char* path, const char* m
         "\r\n",
         method, path, hostname, payload_len);
 
-    // Add Authorization header if token is set
-    if (g_current_auth_token) {
-        // Find the position to insert the Authorization header (after Content-Type)
-        char *content_type_pos = strstr(state.request_headers, "Content-Type: application/json\r\n");
-        if (content_type_pos) {
-            char *insert_pos = content_type_pos + strlen("Content-Type: application/json\r\n");
-            
-            // Create new headers with Authorization inserted
-            static char temp_headers[HTTP_REQUEST_BUFFER_SIZE];
-            size_t prefix_len = insert_pos - state.request_headers;
-            
-            snprintf(temp_headers, sizeof(temp_headers),
-                "%.*sAuthorization: Bearer %s\r\n%s",
-                (int)prefix_len, state.request_headers,
-                g_current_auth_token,
-                insert_pos);
-            
-            strcpy(state.request_headers, temp_headers);
-            state.headers_len = strlen(state.request_headers);
-        }
-    }
-
     if (state.headers_len >= HTTP_REQUEST_BUFFER_SIZE) {
         printf("[http_post_v2] Headers too large\n");
         altcp_tls_free_config(tls_config);

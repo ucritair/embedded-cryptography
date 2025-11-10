@@ -46,8 +46,10 @@ typedef struct __attribute__((__packed__)) {
 } msg_payload_version_response_t;
 
 // Payload for sensor data
+#define NUM_SENSORS 5
+
 typedef struct __attribute__((__packed__)) {
-    uint32_t sensor_value;
+    uint32_t sensor_values[NUM_SENSORS];  // Array of 5 sensor values
 } msg_payload_sensor_data_t;
 
 // Payload for WiFi connect

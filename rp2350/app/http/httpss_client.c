@@ -9,11 +9,15 @@
 #include "crypto_shared.h"
 #include <string.h>
 
+// Access to global auth token from http_post_client.c
+extern const char* g_current_auth_token;
+
 #define JSMN_STATIC
 #include "jsmn.h"
 
 // Response buffer for storing API responses
-static char response_buffer[8192];
+// Increased to 12KB to fit full TFHE public key config response (~10.4KB actual)
+static char response_buffer[12288];
 static size_t response_len = 0;
 static balvi_config_t current_config;
 
@@ -62,14 +66,20 @@ void balvi_api_health_check(const char* hostname) {
 
 // Custom callback to store response data
 err_t store_response_callback(void *arg, struct altcp_pcb *conn, struct pbuf *p, err_t err) {
-    if (p != NULL && response_len < sizeof(response_buffer) - 1) {
-        size_t copy_len = p->tot_len;
-        if (copy_len > sizeof(response_buffer) - response_len - 1) {
-            copy_len = sizeof(response_buffer) - response_len - 1;
+    if (p != NULL) {
+        if (response_len < sizeof(response_buffer) - 1) {
+            size_t copy_len = p->tot_len;
+            if (copy_len > sizeof(response_buffer) - response_len - 1) {
+                printf("WARNING: Response truncated! Buffer full (%zu bytes), need %zu more\n",
+                       response_len, p->tot_len);
+                copy_len = sizeof(response_buffer) - response_len - 1;
+            }
+            pbuf_copy_partial(p, response_buffer + response_len, copy_len, 0);
+            response_len += copy_len;
+            response_buffer[response_len] = '\0';
+        } else {
+            printf("WARNING: Response buffer full, dropping %u bytes\n", p->tot_len);
         }
-        pbuf_copy_partial(p, response_buffer + response_len, copy_len, 0);
-        response_len += copy_len;
-        response_buffer[response_len] = '\0';
         pbuf_free(p);
     }
     return ERR_OK;
@@ -97,7 +107,6 @@ void balvi_api_get_config(const char* hostname) {
         printf("Balvi API config request failed\n");
     } else {
         printf("Balvi API config request successful\n");
-        printf("Response: %s\n", response_buffer);
 
         // Parse the JSON response
         if (parse_balvi_config(response_buffer, response_len, &current_config) == 0) {
@@ -382,6 +391,72 @@ int balvi_api_verify_proof(const char* hostname, const char* nonce_b64, const ch
         return 0;
     } else {
         printf("[balvi_api] Missing fields in response\n");
+        return -1;
+    }
+}
+
+// POST /ingest - Submit encrypted sensor readings
+// Note: This is a simplified version without Bearer auth header support
+// The server needs to be configured to accept requests without authentication for now
+int balvi_api_ingest(const char* hostname, const char** ct_b64_array, size_t num_cts,
+                     const char* timestamp, const char* auth_token) {
+    http_response_t http_resp = {0};
+
+    // Build JSON payload: {"ts":"...", "sensors":["ct1","ct2",...]}
+    // Use PSRAM for large buffer (40 ciphertexts * ~1.5KB each = ~60KB JSON)
+    static char json_body[65536] __attribute__((section(".psram_data")));
+    int offset = 0;
+
+    offset += snprintf(json_body + offset, sizeof(json_body) - offset,
+                      "{\"ts\":\"%s\",\"sensors\":[", timestamp);
+
+    for (size_t i = 0; i < num_cts; i++) {
+        offset += snprintf(json_body + offset, sizeof(json_body) - offset,
+                          "\"%s\"%s", ct_b64_array[i], (i < num_cts - 1) ? "," : "");
+        if (offset >= sizeof(json_body) - 10) {
+            printf("[balvi_api_ingest] JSON body too large\n");
+            return -1;
+        }
+    }
+
+    offset += snprintf(json_body + offset, sizeof(json_body) - offset, "]}");
+
+    printf("[balvi_api_ingest] Sending %zu ciphertexts to %s/ingest\n", num_cts, hostname);
+    printf("[balvi_api_ingest] JSON body length: %d bytes\n", offset);
+    printf("[balvi_api_ingest] Auth token: %.32s...\n", auth_token);
+
+    // Set global auth token for this request (need to cast away const)
+    *(const char**)&g_current_auth_token = auth_token;
+
+    // Use https_post_json_2 for large payload support with auth
+    int result = https_post_json_2(hostname, "/ingest", json_body, &http_resp);
+    
+    // Clear auth token after request
+    *(const char**)&g_current_auth_token = NULL;
+
+    if (result != 0 || !http_resp.success) {
+        printf("[balvi_api_ingest] POST failed: rc=%d, status=%d\n", result, http_resp.status_code);
+        if (http_resp.body && http_resp.body_len > 0) {
+            printf("[balvi_api_ingest] Response body: %.*s\n",
+                   (int)http_resp.body_len, http_resp.body);
+        }
+        http_response_free(&http_resp);
+        return -1;
+    }
+
+    printf("[balvi_api_ingest] Response status: %d\n", http_resp.status_code);
+
+    if (http_resp.status_code == 202 || http_resp.status_code == 200) {
+        printf("[balvi_api_ingest] Data accepted successfully\n");
+        http_response_free(&http_resp);
+        return 0;
+    } else {
+        printf("[balvi_api_ingest] Server returned non-202 status\n");
+        if (http_resp.body_len > 0) {
+            printf("[balvi_api_ingest] Response body: %.*s\n",
+                   (int)http_resp.body_len, http_resp.body);
+        }
+        http_response_free(&http_resp);
         return -1;
     }
 }

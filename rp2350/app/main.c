@@ -28,7 +28,6 @@
 
 // Rust FFI
 #include "include/battery.h"
-#include "battery_e2e.h"
 
 // Global variables for WiFi credentials
 static char wifi_ssid[MAX_SSID_LEN + 1];
@@ -133,6 +132,10 @@ static bool connect_to_wifi(uint8_t auth_mode)
 // TinyFrame instance
 static TinyFrame *tf;
 
+// Global auth token storage
+static char g_access_token[512] = "";  // Empty initially, filled by ZKP auth
+static bool g_auth_token_valid = false;
+
 /**
  * Listener for the firmware version query
  */
@@ -201,12 +204,153 @@ TF_Result sensor_data_listener(TinyFrame *tf, TF_Msg *msg)
 {
     if (msg->len == sizeof(msg_payload_sensor_data_t)) {
         msg_payload_sensor_data_t *payload = (msg_payload_sensor_data_t *)msg->data;
-        printf("Received sensor data with value: %u\n", payload->sensor_value);
+        printf("\n=== Received Sensor Data ===\n");
+        printf("Sensor values: [");
+        for (int i = 0; i < NUM_SENSORS; i++) {
+            printf("%u", payload->sensor_values[i]);
+            if (i < NUM_SENSORS - 1) printf(", ");
+        }
+        printf("]\n");
+
+        // Check if we have an auth token
+        if (!g_auth_token_valid) {
+            printf("WARNING: No valid auth token. Run ZKP authentication first.\n");
+            TF_Respond(tf, msg);
+            return TF_STAY;
+        }
+
+        // Get TFHE public key from cache
+        balvi_config_t* config = get_current_config();
+        if (!config || !config->valid) {
+            printf("ERROR: TFHE public key not available. Fetching...\n");
+            balvi_api_get_config("air.gp.xyz");
+            config = get_current_config();
+            if (!config || !config->valid) {
+                printf("ERROR: Failed to fetch TFHE config\n");
+                TF_Respond(tf, msg);
+                return TF_STAY;
+            }
+        }
+
+        printf("\n=== Encrypting Sensor Data with TFHE (Core1) ===\n");
+        printf("Using 5x8 encoding (5 sensors, 8 bits each = 40 ciphertexts)\n");
+
+        // Check if we have a valid auth token
+        if (!g_auth_token_valid || strlen(g_access_token) == 0) {
+            printf("ERROR: No valid auth token available\n");
+            TF_Respond(tf, msg);
+            return TF_STAY;
+        }
+        printf("Using auth token: %.32s...\n", g_access_token);
+
+        // Initialize pointer to shared memory
+        if (crypto_shared == NULL) {
+            crypto_shared = (crypto_shared_t*)CRYPTO_SHARED_ADDR;
+        }
+
+        // Use existing config variable (already fetched above)
+        if (!config->tfhe_public_key_b64[0]) {
+            printf("ERROR: No TFHE public key available\n");
+            TF_Respond(tf, msg);
+            return TF_STAY;
+        }
+
+        // Copy inputs to shared memory (PSRAM)
+        printf("Copying TFHE public key to shared memory...\n");
+        printf("Shared memory pointer: %p\n", crypto_shared);
+        printf("TFHE key length: %zu\n", strlen(config->tfhe_public_key_b64));
+        
+        // Check if shared memory is accessible
+        if (crypto_shared == NULL) {
+            printf("ERROR: Shared memory not initialized!\n");
+            TF_Respond(tf, msg);
+            return TF_STAY;
+        }
+        
+        // Test write to shared memory
+        crypto_shared->compute_done = false;
+        printf("Shared memory write test passed\n");
+        
+        strcpy(crypto_shared->tfhe_pk_b64, config->tfhe_public_key_b64);
+        printf("TFHE public key copied (%zu chars)\n", strlen(crypto_shared->tfhe_pk_b64));
+
+        // Copy sensor values from payload
+        printf("Setting sensor values from payload...\n");
+        for (int i = 0; i < NUM_SENSORS; i++) {
+            // Clamp to 8-bit values (0-255)
+            crypto_shared->sensor_values[i] = (payload->sensor_values[i] > 255) ? 255 : payload->sensor_values[i];
+        }
+        printf("Sensor values set: [%u, %u, %u, %u, %u]\n",
+               crypto_shared->sensor_values[0], crypto_shared->sensor_values[1],
+               crypto_shared->sensor_values[2], crypto_shared->sensor_values[3],
+               crypto_shared->sensor_values[4]);
+
+        // Start TFHE encryption on Core1
+        printf("Launching Core1 for TFHE encryption...\n");
+
+        // Reset Core1 first (in case it was running from previous operation)
+        multicore_reset_core1();
+
+        // Launch Core1 with PSRAM stack for TFHE encryption
+        multicore_launch_core1_with_stack(core1_tfhe_encrypt_sensors_entry, (uint32_t *)PSRAM_STACK_BOT, PSRAM_STACK_SIZE);
+        printf("Core1 launched, waiting for completion...\n");
+
+        // Wait for completion with timeout
+        int timeout_count = 0;
+        while (!crypto_shared->compute_done) {
+            sleep_ms(500);
+            timeout_count++;
+            if (timeout_count % 10 == 0) {
+                printf("Still waiting... (%d seconds)\n", timeout_count / 2);
+            }
+            if (timeout_count > 120) { // 60 second timeout
+                printf("TIMEOUT: TFHE encryption took too long\n");
+                multicore_reset_core1();  // Clean up Core1 on timeout
+                TF_Respond(tf, msg);
+                return TF_STAY;
+            }
+        }
+
+        printf("Core1 completed with error code: %d\n", crypto_shared->error_code);
+
+        // Reset Core1 after completion (prepare for next operation)
+        multicore_reset_core1();
+
+        if (crypto_shared->error_code != 0) {
+            printf("TFHE encryption failed: %d\n", crypto_shared->error_code);
+            TF_Respond(tf, msg);
+            return TF_STAY;
+        }
+
+        printf("TFHE encryption completed successfully\n");
+
+        // Build array with single ciphertext
+        const char* ct_b64_array[1];
+        ct_b64_array[0] = crypto_shared->ct_b64[0];
+
+        // Send to /ingest endpoint with current timestamp
+        time_t now = time(NULL);
+        struct tm* utc = gmtime(&now);
+        char timestamp[32];
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", utc);
+        
+        printf("\n=== Sending to /ingest endpoint ===\n");
+        printf("Timestamp: %s\n", timestamp);
+        printf("Auth token: %.32s...\n", g_access_token);
+
+        int ingest_result = balvi_api_ingest("air.gp.xyz", ct_b64_array, 1,
+                                             timestamp, g_access_token);
+        if (ingest_result == 0) {
+            printf("✓ Sensor data successfully ingested to cloud!\n");
+        } else {
+            printf("✗ Failed to ingest sensor data (error %d)\n", ingest_result);
+        }
 
         // Acknowledge the message
         TF_Respond(tf, msg);
     } else {
-        printf("Received sensor data with invalid payload size: %u\n", msg->len);
+        printf("Received sensor data with invalid payload size: %u (expected %zu)\n",
+               msg->len, sizeof(msg_payload_sensor_data_t));
     }
     return TF_STAY;
 }
@@ -409,14 +553,21 @@ TF_Result zkp_authenticate_listener(TinyFrame *tf, TF_Msg *msg)
         strncpy(response.expires_at, auth_result.expires_at, MAX_TIMESTAMP_LEN - 1);
         response.expires_at[MAX_TIMESTAMP_LEN - 1] = '\0';
 
+        // Store token globally for sensor data encryption
+        strncpy(g_access_token, auth_result.access_token, sizeof(g_access_token) - 1);
+        g_access_token[sizeof(g_access_token) - 1] = '\0';
+        g_auth_token_valid = true;
+
         printf("[ZKP Auth] Authentication successful\n");
         printf("[ZKP Auth] Access Token: %.32s...\n", response.access_token);
         printf("[ZKP Auth] Expires at: %s\n", response.expires_at);
+        printf("[ZKP Auth] Token stored globally for sensor encryption\n");
     } else {
         // Failure
         response.success = 0;
         response.access_token[0] = '\0';
         response.expires_at[0] = '\0';
+        g_auth_token_valid = false;
 
         printf("[ZKP Auth] Authentication failed with error code: %d\n", rc);
     }
@@ -779,7 +930,7 @@ void main_task(__unused void *params) {
                 break;
 
             case APP_STATE_WIFI_CONNECTED:
-                // no-op for now..
+                // Do nothing, wait for TinyFrame commands
                 break;
         }
 

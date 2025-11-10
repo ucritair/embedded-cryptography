@@ -24,6 +24,12 @@ typedef struct {
     char proof_b64[579746];   // ~566KB buffer for base64 proof
     size_t proof_b64_len;
 
+    // TFHE encryption inputs/outputs (for sensor data)
+    char tfhe_pk_b64[10240];      // Base64 TFHE public key
+    uint32_t sensor_values[5];    // 5 sensor values to encrypt
+    char ct_b64[5][12288];        // 5 base64-encoded ciphertexts (one per sensor, ~10KB each)
+    size_t ct_b64_lens[5];        // Length of each base64 ciphertext
+
     // Control flags
     volatile bool compute_done;
     volatile int error_code;
@@ -38,5 +44,6 @@ extern crypto_shared_t *crypto_shared;
 // Core1 entry points
 void core1_compute_parent_entry(void);
 void core1_generate_proof_entry(void);
+void core1_tfhe_encrypt_sensors_entry(void);
 
 #endif // CRYPTO_SHARED_H

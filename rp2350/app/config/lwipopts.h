@@ -6,8 +6,8 @@
 #define NO_SYS 0
 
 // Set master heap size. Must be defined before including common opts.
-// Increased from 32KB to 200KB to support large ZKP proof uploads
-#define MEM_SIZE (200 * 1024)
+// Reduced from 200KB to 64KB to conserve SRAM (large buffers use pbufs instead)
+#define MEM_SIZE (64 * 1024)
 
 // Generally you would define your own explicit list of lwIP options
 // (see https://www.nongnu.org/lwip/2_1_x/group__lwip__opts.html)
