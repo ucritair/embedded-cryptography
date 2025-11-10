@@ -13,7 +13,8 @@
 #include "jsmn.h"
 
 // Response buffer for storing API responses
-static char response_buffer[8192];
+// Increased to 12KB to fit full TFHE public key config response (~10.4KB actual)
+static char response_buffer[12288];
 static size_t response_len = 0;
 static balvi_config_t current_config;
 
@@ -62,14 +63,20 @@ void balvi_api_health_check(const char* hostname) {
 
 // Custom callback to store response data
 err_t store_response_callback(void *arg, struct altcp_pcb *conn, struct pbuf *p, err_t err) {
-    if (p != NULL && response_len < sizeof(response_buffer) - 1) {
-        size_t copy_len = p->tot_len;
-        if (copy_len > sizeof(response_buffer) - response_len - 1) {
-            copy_len = sizeof(response_buffer) - response_len - 1;
+    if (p != NULL) {
+        if (response_len < sizeof(response_buffer) - 1) {
+            size_t copy_len = p->tot_len;
+            if (copy_len > sizeof(response_buffer) - response_len - 1) {
+                printf("WARNING: Response truncated! Buffer full (%zu bytes), need %zu more\n",
+                       response_len, p->tot_len);
+                copy_len = sizeof(response_buffer) - response_len - 1;
+            }
+            pbuf_copy_partial(p, response_buffer + response_len, copy_len, 0);
+            response_len += copy_len;
+            response_buffer[response_len] = '\0';
+        } else {
+            printf("WARNING: Response buffer full, dropping %u bytes\n", p->tot_len);
         }
-        pbuf_copy_partial(p, response_buffer + response_len, copy_len, 0);
-        response_len += copy_len;
-        response_buffer[response_len] = '\0';
         pbuf_free(p);
     }
     return ERR_OK;
@@ -97,7 +104,6 @@ void balvi_api_get_config(const char* hostname) {
         printf("Balvi API config request failed\n");
     } else {
         printf("Balvi API config request successful\n");
-        printf("Response: %s\n", response_buffer);
 
         // Parse the JSON response
         if (parse_balvi_config(response_buffer, response_len, &current_config) == 0) {

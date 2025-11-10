@@ -33,7 +33,7 @@ target_include_directories(tinyframe PUBLIC
 add_subdirectory(app)
 
 # Pass firmware version to the compiler
-target_compile_definitions(pico_project PRIVATE
+target_compile_definitions(cat_rp2350 PRIVATE
     FIRMWARE_VERSION_MAJOR=${FIRMWARE_VERSION_MAJOR}
     FIRMWARE_VERSION_MINOR=${FIRMWARE_VERSION_MINOR}
     FIRMWARE_VERSION_PATCH=${FIRMWARE_VERSION_PATCH}

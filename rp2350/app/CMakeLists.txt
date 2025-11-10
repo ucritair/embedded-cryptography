@@ -1,27 +1,23 @@
 cmake_minimum_required(VERSION 3.13)
 
-project(pico_project C CXX ASM)
+project(cat_rp2350 C CXX ASM)
 
 include(http/http_client_util.cmake)
 
-add_executable(pico_project
+add_executable(cat_rp2350
     main.c
     tf_port.c
     ipc.c
     cloud/balvi_config.c
     http/httpss_client.c
     http/http_post_client.c
-#    auth/zkp_auth.c
 
     # Crypto Ops
-    # TODO: Improve name
-    crypto/battery_e2e.c
     crypto/crypto_shared.c
 )
 
-target_include_directories(pico_project PUBLIC
+target_include_directories(cat_rp2350 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/auth
     ${CMAKE_CURRENT_SOURCE_DIR}/cloud
     ${CMAKE_CURRENT_SOURCE_DIR}/crypto
     ${CMAKE_CURRENT_SOURCE_DIR}/config
@@ -31,7 +27,7 @@ target_include_directories(pico_project PUBLIC
 )
 
 # pull in common dependencies
-target_link_libraries(pico_project pico_stdlib tinyframe pico_cyw43_arch_lwip_sys_freertos pico_lwip pico_lwip_sntp pico_multicore
+target_link_libraries(cat_rp2350 pico_stdlib tinyframe pico_cyw43_arch_lwip_sys_freertos pico_lwip pico_lwip_sntp pico_multicore
     pico_async_context_freertos
     pico_bootrom
     FreeRTOS-Kernel-Heap4
@@ -39,14 +35,14 @@ target_link_libraries(pico_project pico_stdlib tinyframe pico_cyw43_arch_lwip_sy
     ${CMAKE_SOURCE_DIR}/../target/thumbv8m.main-none-eabihf/release/libbattery_embedded.a
 )
 
-target_compile_definitions(pico_project PRIVATE
+target_compile_definitions(cat_rp2350 PRIVATE
     configNUMBER_OF_CORES=1
     NO_SYS=0
 )
 
 # enable usb output, disable uart output
-pico_enable_stdio_usb(pico_project 1)
-pico_enable_stdio_uart(pico_project 0)
+pico_enable_stdio_usb(cat_rp2350 1)
+pico_enable_stdio_uart(cat_rp2350 0)
 
 
-pico_add_extra_outputs(pico_project)
+pico_add_extra_outputs(cat_rp2350)

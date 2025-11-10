@@ -28,7 +28,6 @@
 
 // Rust FFI
 #include "include/battery.h"
-#include "battery_e2e.h"
 
 // Global variables for WiFi credentials
 static char wifi_ssid[MAX_SSID_LEN + 1];
@@ -201,12 +200,35 @@ TF_Result sensor_data_listener(TinyFrame *tf, TF_Msg *msg)
 {
     if (msg->len == sizeof(msg_payload_sensor_data_t)) {
         msg_payload_sensor_data_t *payload = (msg_payload_sensor_data_t *)msg->data;
-        printf("Received sensor data with value: %u\n", payload->sensor_value);
+        printf("\n=== Received Sensor Data ===\n");
+        printf("Sensor values: [");
+        for (int i = 0; i < NUM_SENSORS; i++) {
+            printf("%u", payload->sensor_values[i]);
+            if (i < NUM_SENSORS - 1) printf(", ");
+        }
+        printf("]\n");
+
+        balvi_api_get_config("air.gp.xyz");
+
+        balvi_config_t* config = get_current_config();
+        if (config && config->valid) {
+            printf("\n=== TFHE Public Key ===\n");
+            printf("TFHE Public Key (base64, first 100 chars): %.100s...\n",
+                   config->tfhe_public_key_b64);
+            printf("TFHE Public Key length: %zu characters\n",
+                   strlen(config->tfhe_public_key_b64));
+            printf("Merkle Root (base64): %s\n", config->merkle_root_b64);
+
+            // TODO: Encrypt sensor data with TFHE and send to /ingest
+        } else {
+            printf("ERROR: TFHE public key not available \n");
+        }
 
         // Acknowledge the message
         TF_Respond(tf, msg);
     } else {
-        printf("Received sensor data with invalid payload size: %u\n", msg->len);
+        printf("Received sensor data with invalid payload size: %u (expected %zu)\n",
+               msg->len, sizeof(msg_payload_sensor_data_t));
     }
     return TF_STAY;
 }
@@ -779,7 +801,7 @@ void main_task(__unused void *params) {
                 break;
 
             case APP_STATE_WIFI_CONNECTED:
-                // no-op for now..
+                // Do nothing, wait for TinyFrame commands
                 break;
         }
 
