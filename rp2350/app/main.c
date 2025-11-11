@@ -746,11 +746,11 @@ void main_task(__unused void *params) {
 
     printf("Hello, Pico!\n");
 
-    // Add a delay to allow for UART connection
-    for (int i = 0; i < 5; i++) {
-        printf("Waiting for UART...\n");
-        vTaskDelay(1000);
-    }
+    // // Add a delay to allow for UART connection
+    // for (int i = 0; i < 5; i++) {
+    //     printf("Waiting for UART...\n");
+    //     vTaskDelay(1000);
+    // }
  
     printf("Querying Rust library version...\n");
     printf("battery_api_version(): 0x%X\n", battery_api_version());

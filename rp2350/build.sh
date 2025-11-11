@@ -3,7 +3,7 @@
 # --- Firmware Version ---
 FIRMWARE_VERSION_MAJOR=1
 FIRMWARE_VERSION_MINOR=0
-FIRMWARE_VERSION_PATCH=2
+FIRMWARE_VERSION_PATCH=3
 
 # 1. Build the Rust crypto library first
 (cd ../ && \
