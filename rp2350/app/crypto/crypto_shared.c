@@ -214,78 +214,67 @@ void core1_tfhe_encrypt_sensors_entry(void) {
 
     printf("[Core1] TFHE PK decoded: %zu bytes\n", pk_len);
 
-    // Encrypt each sensor value as a full byte (8 bits), then extract individual bit ciphertexts
-    // tfhe_pk_encrypt encodes bits LSB-first, so we need to reverse bit order before encrypting
-    for (int sensor_idx = 0; sensor_idx < 5; sensor_idx++) {
-        uint32_t sensor_value = crypto_shared->sensor_values[sensor_idx];
-        printf("[Core1] Sensor %d = %u (0x%02x)\n", sensor_idx, sensor_value, sensor_value & 0xFF);
-
-        // We want MSB-first in output, but tfhe_pk_encrypt uses LSB-first encoding
-        // So we need to bit-reverse the byte before encryption
-        uint8_t byte_to_encrypt = (uint8_t)(sensor_value & 0xFF);
-
-        // Bit-reverse: swap bit 0↔7, 1↔6, 2↔5, 3↔4
-        uint8_t reversed = 0;
-        for (int i = 0; i < 8; i++) {
-            if (byte_to_encrypt & (1 << i)) {
-                reversed |= (1 << (7 - i));
-            }
-        }
-
-        printf("[Core1]   Original: 0x%02x, Reversed: 0x%02x\n", byte_to_encrypt, reversed);
-
-        // Generate random seed
-        uint8_t seed[32];
-        uint64_t rng_seed = time_us_64() + sensor_idx;
-        for (int i = 0; i < 32; i++) {
-            rng_seed = rng_seed * 1103515245 + 12345;  // LCG
-            seed[i] = (uint8_t)(rng_seed >> 8);
-        }
-
-        // Encrypt the full byte (8 bits encoded LSB-first into TRLWE)
-        uint8_t ct_bytes[8192];
-        size_t ct_written = 0;
-        ret = tfhe_pk_encrypt(
-            pk_bytes, pk_len,
-            &reversed, 1,  // Encrypt 1 byte = 8 bits
-            seed, 32,
-            ct_bytes, sizeof(ct_bytes),
-            &ct_written
-        );
-
-        if (ret != BATTERY_OK) {
-            printf("[Core1] TFHE encrypt failed: sensor=%d, err=%d\n", sensor_idx, ret);
-            crypto_shared->error_code = -2;
-            crypto_shared->compute_done = true;
-            while (true) { __wfi(); }
-        }
-
-        printf("[Core1]   Encrypted to %zu bytes\n", ct_written);
-
-        // Base64 encode the ciphertext (one ciphertext per sensor)
-        size_t b64_len = 0;
-        ret = mbedtls_base64_encode(
-            (unsigned char*)crypto_shared->ct_b64[sensor_idx],
-            sizeof(crypto_shared->ct_b64[sensor_idx]),
-            &b64_len,
-            ct_bytes,
-            ct_written
-        );
-
-        if (ret != 0) {
-            printf("[Core1] Base64 encode failed: sensor=%d, err=%d\n", sensor_idx, ret);
-            crypto_shared->error_code = -3;
-            crypto_shared->compute_done = true;
-            while (true) { __wfi(); }
-        }
-
-        crypto_shared->ct_b64[sensor_idx][b64_len] = '\0';
-        crypto_shared->ct_b64_lens[sensor_idx] = b64_len;
-
-        printf("[Core1]   Base64 encoded: %zu chars\n", b64_len);
+    // Combine all 5 sensors into a single 5-byte word (40 bits total)
+    // Encrypt as a single ciphertext containing all sensor values
+    uint8_t sensor_bytes[5];
+    printf("[Core1] Combining 5 sensors into single 5-byte word (LSB-first):\n");
+    for (int i = 0; i < 5; i++) {
+        sensor_bytes[i] = (uint8_t)(crypto_shared->sensor_values[i] & 0xFF);
+        printf("[Core1]   Sensor %d = %u (0x%02x)\n", i, crypto_shared->sensor_values[i], sensor_bytes[i]);
     }
 
-    printf("[Core1] All 5 ciphertexts generated successfully\n");
+    // Generate random seed
+    uint8_t seed[32];
+    uint64_t rng_seed = time_us_64();
+    for (int i = 0; i < 32; i++) {
+        rng_seed = rng_seed * 1103515245 + 12345;  // LCG
+        seed[i] = (uint8_t)(rng_seed >> 8);
+    }
+
+    // Encrypt all 5 bytes as a single ciphertext (40 bits total)
+    // Using LSB-first encoding (no bit-reversal needed)
+    uint8_t ct_bytes[16384];  // Larger buffer for 5-byte encryption
+    size_t ct_written = 0;
+    printf("[Core1] Encrypting 5 bytes (40 bits) as single ciphertext (LSB-first)...\n");
+    ret = tfhe_pk_encrypt(
+        pk_bytes, pk_len,
+        sensor_bytes, 5,  // Encrypt 5 bytes = 40 bits (LSB-first)
+        seed, 32,
+        ct_bytes, sizeof(ct_bytes),
+        &ct_written
+    );
+
+    if (ret != BATTERY_OK) {
+        printf("[Core1] TFHE encrypt failed: err=%d\n", ret);
+        crypto_shared->error_code = -2;
+        crypto_shared->compute_done = true;
+        while (true) { __wfi(); }
+    }
+
+    printf("[Core1] Encrypted to %zu bytes\n", ct_written);
+
+    // Base64 encode the single combined ciphertext
+    size_t b64_len = 0;
+    ret = mbedtls_base64_encode(
+        (unsigned char*)crypto_shared->ct_b64[0],  // Store in first slot
+        sizeof(crypto_shared->ct_b64[0]),
+        &b64_len,
+        ct_bytes,
+        ct_written
+    );
+
+    if (ret != 0) {
+        printf("[Core1] Base64 encode failed: err=%d\n", ret);
+        crypto_shared->error_code = -3;
+        crypto_shared->compute_done = true;
+        while (true) { __wfi(); }
+    }
+
+    crypto_shared->ct_b64[0][b64_len] = '\0';
+    crypto_shared->ct_b64_lens[0] = b64_len;
+
+    printf("[Core1] Base64 encoded: %zu chars\n", b64_len);
+    printf("[Core1] Single combined ciphertext generated successfully\n");
     crypto_shared->error_code = 0;
     crypto_shared->compute_done = true;
 

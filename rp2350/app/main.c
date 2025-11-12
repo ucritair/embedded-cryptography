@@ -233,7 +233,7 @@ TF_Result sensor_data_listener(TinyFrame *tf, TF_Msg *msg)
         }
 
         printf("\n=== Encrypting Sensor Data with TFHE (Core1) ===\n");
-        printf("Using 5x8 encoding (5 sensors, 8 bits each = 40 ciphertexts)\n");
+        printf("Using combined 5-byte encoding (5 sensors × 8 bits = 40 bits total)\n");
 
         // Check if we have a valid auth token
         if (!g_auth_token_valid || strlen(g_access_token) == 0) {
@@ -873,14 +873,7 @@ void main_task(__unused void *params) {
     stdio_init_all();
     tf_port_init();
 
-    printf("Hello, Pico!\n");
-
-    // Add a delay to allow for UART connection
-    for (int i = 0; i < 5; i++) {
-        printf("Waiting for UART...\n");
-        vTaskDelay(1000);
-    }
- 
+    printf("Hello, Pico!\n"); 
     printf("Querying Rust library version...\n");
     printf("battery_api_version(): 0x%X\n", battery_api_version());
 

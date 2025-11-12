@@ -3,9 +3,19 @@
 # --- Firmware Version ---
 FIRMWARE_VERSION_MAJOR=1
 FIRMWARE_VERSION_MINOR=0
-FIRMWARE_VERSION_PATCH=2
+FIRMWARE_VERSION_PATCH=4
+
+# Check for "clean" argument FIRST (before building)
+if [ "$1" == "clean" ]; then
+    echo "--- Performing a clean build ---"
+    echo "Cleaning Rust build artifacts..."
+    (cd ../ && cargo clean --target=thumbv8m.main-none-eabihf --release)
+    echo "Cleaning CMake build directory..."
+    rm -rf build
+fi
 
 # 1. Build the Rust crypto library first
+echo "Building Rust crypto library..."
 (cd ../ && \
     cargo build --target=thumbv8m.main-none-eabihf --no-default-features --features "ffi, alloc" --release)
 
@@ -13,13 +23,6 @@ FIRMWARE_VERSION_PATCH=2
 if [ $? -ne 0 ]; then
     echo "Rust build failed. Exiting."
     exit 1
-fi
-
-
-# Check for "clean" argument
-if [ "$1" == "clean" ]; then
-    echo "--- Performing a clean build ---"
-    rm -rf build
 fi
 
 # Create build directory if it doesn't exist, and enter it
