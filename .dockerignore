@@ -1,0 +1,22 @@
+# Ignore build artifacts
+target/
+rp2350/build/
+*.uf2
+*.elf
+*.bin
+*.hex
+
+# Ignore git files
+.git/
+.gitignore
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Ignore documentation
+*.md
+docs/
