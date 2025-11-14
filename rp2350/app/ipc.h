@@ -52,6 +52,20 @@ typedef struct __attribute__((__packed__)) {
     uint32_t sensor_values[NUM_SENSORS];  // Array of 5 sensor values
 } msg_payload_sensor_data_t;
 
+// Sensor data response status codes
+#define SENSOR_DATA_STATUS_SUCCESS              0
+#define SENSOR_DATA_STATUS_INVALID_PAYLOAD      1
+#define SENSOR_DATA_STATUS_NO_AUTH_TOKEN        2
+#define SENSOR_DATA_STATUS_NO_TFHE_CONFIG       3
+#define SENSOR_DATA_STATUS_SHARED_MEM_ERROR     4
+#define SENSOR_DATA_STATUS_ENCRYPTION_TIMEOUT   5
+#define SENSOR_DATA_STATUS_ENCRYPTION_FAILED    6
+#define SENSOR_DATA_STATUS_INGEST_FAILED        7
+
+typedef struct __attribute__((__packed__)) {
+    uint8_t status;  // See SENSOR_DATA_STATUS_* constants above
+} msg_payload_sensor_data_response_t;
+
 // Payload for WiFi connect
 #define MAX_SSID_LEN 32
 #define MAX_PASSWORD_LEN 64
