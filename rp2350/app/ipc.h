@@ -67,6 +67,7 @@ typedef struct __attribute__((__packed__)) {
     char ssid[MAX_SSID_LEN];
     char password[MAX_PASSWORD_LEN];
     uint8_t auth_mode;  // See WIFI_AUTH_* constants above
+    uint32_t timeout_ms;  // Connection timeout in milliseconds (e.g., 30000 = 30 seconds)
 } msg_payload_wifi_connect_t;
 
 // WiFi connect response status codes

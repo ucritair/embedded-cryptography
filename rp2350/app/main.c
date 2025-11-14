@@ -96,7 +96,7 @@ int _gettimeofday(struct timeval *tv, void *tz) {
 #define MAIN_TASK_STACK_SIZE 4096
 #define CRYPTO_TASK_STACK_SIZE 2048
 
-static bool connect_to_wifi(uint8_t auth_mode)
+static bool connect_to_wifi_with_timeout(uint8_t auth_mode, uint32_t timeout_ms)
 {
     // Map our simple auth mode to CYW43 auth constants
     uint32_t cyw43_auth;
@@ -119,8 +119,9 @@ static bool connect_to_wifi(uint8_t auth_mode)
             break;
     }
 
-    printf("Connecting to Wi-Fi (SSID: %s, Auth: %u)...\n", wifi_ssid, auth_mode);
-    if (cyw43_arch_wifi_connect_timeout_ms(wifi_ssid, wifi_password, cyw43_auth, 30000)) {
+    printf("Connecting to Wi-Fi (SSID: %s, Auth: %u, Timeout: %u ms)...\n",
+           wifi_ssid, auth_mode, timeout_ms);
+    if (cyw43_arch_wifi_connect_timeout_ms(wifi_ssid, wifi_password, cyw43_auth, timeout_ms)) {
         printf("failed to connect to Wi-Fi.\n");
         return false;
     } else {
@@ -188,8 +189,6 @@ TF_Result wifi_connect_listener(TinyFrame *tf, TF_Msg *msg)
         return TF_STAY;
     }
 
-    printf("Attempting to connect (this will block)...\n");
-
     // Copy credentials from payload
     msg_payload_wifi_connect_t *credentials = (msg_payload_wifi_connect_t *)msg->data;
     strncpy(wifi_ssid, credentials->ssid, MAX_SSID_LEN);
@@ -197,8 +196,17 @@ TF_Result wifi_connect_listener(TinyFrame *tf, TF_Msg *msg)
     strncpy(wifi_password, credentials->password, MAX_PASSWORD_LEN);
     wifi_password[MAX_PASSWORD_LEN] = '\0';
 
-    // Perform the blocking connection attempt with specified auth mode
-    if (connect_to_wifi(credentials->auth_mode)) {
+    // Get timeout from host (use 30s default if 0)
+    uint32_t timeout_ms = credentials->timeout_ms;
+    if (timeout_ms == 0) {
+        timeout_ms = 30000;  // Default to 30 seconds
+        printf("WARNING: Zero timeout specified, using default 30s\n");
+    }
+
+    printf("Attempting to connect (timeout: %u ms)...\n", timeout_ms);
+
+    // Perform the blocking connection attempt with specified auth mode and timeout
+    if (connect_to_wifi_with_timeout(credentials->auth_mode, timeout_ms)) {
         // On success, update state and send SUCCESS status
         app_state = APP_STATE_WIFI_CONNECTED_IDLE;
         response.status = WIFI_CONNECT_STATUS_SUCCESS;
