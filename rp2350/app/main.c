@@ -171,29 +171,59 @@ TF_Result protocol_version_listener(TinyFrame *tf, TF_Msg *msg)
  */
 TF_Result wifi_connect_listener(TinyFrame *tf, TF_Msg *msg)
 {
-    printf("Received WiFi connect request. Attempting to connect (this will block)...\n");
+    printf("Received WiFi connect request.\n");
+    static msg_payload_wifi_connect_response_t response;
 
-    if (msg->len == sizeof(msg_payload_wifi_connect_t)) {
-        // Copy credentials from payload
-        msg_payload_wifi_connect_t *credentials = (msg_payload_wifi_connect_t *)msg->data;
-        strncpy(wifi_ssid, credentials->ssid, MAX_SSID_LEN);
-        wifi_ssid[MAX_SSID_LEN] = '\0';
-        strncpy(wifi_password, credentials->password, MAX_PASSWORD_LEN);
-        wifi_password[MAX_PASSWORD_LEN] = '\0';
-
-        // Perform the blocking connection attempt with specified auth mode
-        if (connect_to_wifi(credentials->auth_mode)) {
-            // On success, update state and send ACK
-            app_state = APP_STATE_WIFI_CONNECTED_IDLE;
-            TF_Respond(tf, msg); // ACK indicates success
-        } else {
-            // On failure, do not send an ACK. The host will time out.
-            app_state = APP_STATE_WAIT_CREDENTIALS; // Go back to waiting
-        }
-    } else {
-        printf("Received WiFi connect with invalid payload size: %u (expected %u)\n",
+    // Validate payload size first
+    if (msg->len != sizeof(msg_payload_wifi_connect_t)) {
+        printf("ERROR: Invalid payload size: %u (expected %u)\n",
                msg->len, sizeof(msg_payload_wifi_connect_t));
+
+        response.status = WIFI_CONNECT_STATUS_INVALID_PAYLOAD;
+        msg->data = (const uint8_t *)&response;
+        msg->len = sizeof(response);
+        TF_Respond(tf, msg);
+
+        printf("Sent response: status=%u (INVALID_PAYLOAD)\n", response.status);
+        return TF_STAY;
     }
+
+    printf("Attempting to connect (this will block)...\n");
+
+    // Copy credentials from payload
+    msg_payload_wifi_connect_t *credentials = (msg_payload_wifi_connect_t *)msg->data;
+    strncpy(wifi_ssid, credentials->ssid, MAX_SSID_LEN);
+    wifi_ssid[MAX_SSID_LEN] = '\0';
+    strncpy(wifi_password, credentials->password, MAX_PASSWORD_LEN);
+    wifi_password[MAX_PASSWORD_LEN] = '\0';
+
+    // Perform the blocking connection attempt with specified auth mode
+    if (connect_to_wifi(credentials->auth_mode)) {
+        // On success, update state and send SUCCESS status
+        app_state = APP_STATE_WIFI_CONNECTED_IDLE;
+        response.status = WIFI_CONNECT_STATUS_SUCCESS;
+
+        msg->data = (const uint8_t *)&response;
+        msg->len = sizeof(response);
+        TF_Respond(tf, msg);
+
+        printf("WiFi connected successfully. Sent response: status=%u (SUCCESS)\n", response.status);
+    } else {
+        // On failure, send appropriate error status
+        // Note: cyw43_arch_wifi_connect_timeout_ms can fail due to:
+        // - Timeout (network not found or connection took too long)
+        // - Auth failure (wrong password/auth mode)
+        // We can't easily distinguish, so use TIMEOUT as catch-all
+        app_state = APP_STATE_WAIT_CREDENTIALS;
+        response.status = WIFI_CONNECT_STATUS_CONNECTION_TIMEOUT;
+
+        msg->data = (const uint8_t *)&response;
+        msg->len = sizeof(response);
+        TF_Respond(tf, msg);
+
+        printf("WiFi connection failed. Sent response: status=%u (TIMEOUT/AUTH_FAILED)\n", response.status);
+    }
+
     return TF_STAY;
 }
 

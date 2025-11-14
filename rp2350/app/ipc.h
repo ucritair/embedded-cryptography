@@ -69,6 +69,15 @@ typedef struct __attribute__((__packed__)) {
     uint8_t auth_mode;  // See WIFI_AUTH_* constants above
 } msg_payload_wifi_connect_t;
 
+// WiFi connect response status codes
+#define WIFI_CONNECT_STATUS_SUCCESS             0
+#define WIFI_CONNECT_STATUS_INVALID_PAYLOAD     1
+#define WIFI_CONNECT_STATUS_CONNECTION_TIMEOUT  2
+
+typedef struct __attribute__((__packed__)) {
+    uint8_t status;  // See WIFI_CONNECT_STATUS_* constants above
+} msg_payload_wifi_connect_response_t;
+
 // Payload for WiFi scan results
 #define MAX_SCAN_RESULTS 10
 
