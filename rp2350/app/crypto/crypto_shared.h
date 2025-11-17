@@ -15,6 +15,7 @@ typedef struct {
     // Inputs for proof generation (base64 encoded)
     char witness_b64[32768];  // Max 24KB witness
     char nonce_b64[64];       // 32 bytes base64 = ~44 chars
+    char secret_b64[128];     // Base64 secret (64 bytes -> ~88 chars base64)
 
     // Output from proof generation (binary)
     uint8_t proof[435898];    // ~425KB buffer for binary proof

@@ -7,10 +7,6 @@
 // Global shared memory pointer (initialized at runtime after PSRAM init)
 crypto_shared_t *crypto_shared = NULL;
 
-// Hardcoded secret (base64: AQAAAAIAAAADAAAABAAAAAUAAAAGAAAABwAAAAgAAAAJAAAACgAAAAsAAAAMAAAADQAAAA4AAAAPAAAAEAAAAA==)
-// This is 64 bytes representing two concatenated leaves
-static const char* SECRET_B64 = "AQAAAAIAAAADAAAABAAAAAUAAAAGAAAABwAAAAgAAAAJAAAACgAAAAsAAAAMAAAADQAAAA4AAAAPAAAAEAAAAA==";
-
 // Core1 entry point for computing parent commitment
 void core1_compute_parent_entry(void) {
     // Initialize pointer to shared memory (in case it's not set)
@@ -19,6 +15,11 @@ void core1_compute_parent_entry(void) {
     }
 
     printf("[Core1] Starting parent computation\n");
+    
+    // Use secret from shared memory
+    const char* secret_to_use = crypto_shared->secret_b64;
+    
+    printf("[Core1] Using ZKP secret: %s... \n", secret_to_use);
 
     crypto_shared->compute_done = false;
     crypto_shared->error_code = 0;
@@ -30,8 +31,8 @@ void core1_compute_parent_entry(void) {
         (unsigned char*)secret16_u32,
         sizeof(secret16_u32),
         &secret_olen,
-        (const unsigned char*)SECRET_B64,
-        strlen(SECRET_B64)
+        (const unsigned char*)secret_to_use,
+        strlen(secret_to_use)
     );
 
     if (ret != 0 || secret_olen != 64) {
@@ -76,6 +77,11 @@ void core1_generate_proof_entry(void) {
     }
 
     printf("[Core1] Starting ZKP proof generation\n");
+    
+    // Use secret from shared memory
+    const char* secret_to_use = crypto_shared->secret_b64;
+    
+    printf("[Core1] Using ZKP secret: %s...\n", secret_to_use);
 
     crypto_shared->compute_done = false;
     crypto_shared->error_code = 0;
@@ -88,8 +94,8 @@ void core1_generate_proof_entry(void) {
         (unsigned char*)secret16_u32,
         sizeof(secret16_u32),
         &secret_olen,
-        (const unsigned char*)SECRET_B64,
-        strlen(SECRET_B64)
+        (const unsigned char*)secret_to_use,
+        strlen(secret_to_use)
     );
 
     if (ret != 0 || secret_olen != 64) {
