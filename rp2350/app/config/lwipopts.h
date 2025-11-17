@@ -1,6 +1,8 @@
 #ifndef _LWIPOPTS_H
 #define _LWIPOPTS_H
 
+#include "buffer_config.h"
+
 // Define NO_SYS to 0 for this project to enable RTOS features.
 // This must be done BEFORE including the common opts file.
 #define NO_SYS 0
@@ -38,12 +40,16 @@
 // Increase TCP window size for TLS to avoid stalling
 // mbedTLS needs 16KB for RX decryption buffer, so TCP_WND should be>
 #define TCP_MSS 1460
-#define TCP_WND (16 * 1024)  // 16KB window
+#define TCP_WND TCP_RECEIVE_WINDOW_SIZE  // Use centralized config
 // Increased send buffer from ~11KB to ~93KB for large ZKP proof uploads
 #define TCP_SND_BUF (64 * TCP_MSS)  // 64 * 1460 = ~93KB send buffer
 #define PBUF_POOL_SIZE 48  // Increased pbuf pool for larger transfers
 // MEMP_NUM_TCP_SEG must be >= TCP_SND_QUEUELEN which is (4*TCP_SND_BUF)/TCP_MSS = 256
 #define MEMP_NUM_TCP_SEG 256  // More TCP segments for chunking large payloads
+
+// Increase TCP receive buffer size
+#define TCP_RCV_SCALE 2  // Enable window scaling
+#define LWIP_WND_SCALE 1  // Enable window scaling support
 
 // Note bug in lwip with LWIP_ALTCP and LWIP_DEBUG
 // https://savannah.nongnu.org/bugs/index.php?62159

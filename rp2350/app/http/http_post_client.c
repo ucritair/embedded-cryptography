@@ -33,7 +33,7 @@ vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl\n\
 #include "psram_config.h"
 
 #define HTTP_REQUEST_BUFFER_SIZE (4 * 1024)   // 4KB for request (headers + small payload)
-#define HTTP_RESPONSE_BUFFER_SIZE (16 * 1024)  // 16KB for responses (static, no realloc)
+#define HTTP_RESPONSE_BUFFER_SIZE (16 * 1024)  // 16KB for POST responses (different from config buffer)
 #define HTTP_TIMEOUT_MS 30000  // 30 second timeout
 
 // Large request buffer in PSRAM for ZKP proofs

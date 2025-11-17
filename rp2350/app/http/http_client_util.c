@@ -80,6 +80,28 @@ static void internal_result_fn(void *arg, httpc_result_t httpc_result, u32_t rx_
     assert(arg);
     EXAMPLE_HTTP_REQUEST_T *req = (EXAMPLE_HTTP_REQUEST_T*)arg;
     HTTP_DEBUG("result %d len %u server_response %u err %d\n", httpc_result, rx_content_len, srv_res, err);
+    
+    // Add detailed debug output
+    printf("HTTP Client Result Details:\n");
+    printf("  httpc_result: %d (", httpc_result);
+    switch(httpc_result) {
+        case 0: printf("OK"); break;
+        case 1: printf("ERR_UNKNOWN"); break;
+        case 2: printf("ERR_CONNECT"); break;
+        case 3: printf("ERR_HOSTNAME"); break;
+        case 4: printf("ERR_CLOSED"); break;
+        case 5: printf("ERR_TIMEOUT"); break;
+        case 6: printf("ERR_SVR_RESP"); break;
+        case 7: printf("ERR_MEM"); break;
+        case 8: printf("LOCAL_ABORT"); break;
+        case 9: printf("ERR_CONTENT_LEN"); break;
+        default: printf("UNKNOWN_%d", httpc_result); break;
+    }
+    printf(")\n");
+    printf("  rx_content_len: %u bytes\n", rx_content_len);
+    printf("  srv_res (HTTP status): %u\n", srv_res);
+    printf("  lwip_err: %d\n", err);
+    
     req->complete = true;
     req->result = httpc_result;
     if (req->result_fn) {

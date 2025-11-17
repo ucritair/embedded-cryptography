@@ -7,6 +7,7 @@
 #include "http_post_client.h"
 #include "psram_config.h"
 #include "crypto_shared.h"
+#include "buffer_config.h"
 #include <string.h>
 
 // Access to global auth token from http_post_client.c
@@ -16,8 +17,7 @@ extern const char* g_current_auth_token;
 #include "jsmn.h"
 
 // Response buffer for storing API responses
-// Increased to 12KB to fit full TFHE public key config response (~10.4KB actual)
-static char response_buffer[12288];
+static char response_buffer[HTTP_RESPONSE_BUFFER_SIZE];
 static size_t response_len = 0;
 static balvi_config_t current_config;
 
@@ -66,7 +66,12 @@ void balvi_api_health_check(const char* hostname) {
 
 // Custom callback to store response data
 err_t store_response_callback(void *arg, struct altcp_pcb *conn, struct pbuf *p, err_t err) {
+    static int packet_count = 0;
+    
     if (p != NULL) {
+        packet_count++;
+        printf("Packet %d: %u bytes, total so far: %zu\n", packet_count, p->tot_len, response_len);
+        
         if (response_len < sizeof(response_buffer) - 1) {
             size_t copy_len = p->tot_len;
             if (copy_len > sizeof(response_buffer) - response_len - 1) {
@@ -81,6 +86,9 @@ err_t store_response_callback(void *arg, struct altcp_pcb *conn, struct pbuf *p,
             printf("WARNING: Response buffer full, dropping %u bytes\n", p->tot_len);
         }
         pbuf_free(p);
+    } else {
+        printf("Received NULL pbuf (connection closed), packet count: %d\n", packet_count);
+        packet_count = 0; // Reset for next request
     }
     return ERR_OK;
 }
@@ -101,13 +109,16 @@ void balvi_api_get_config(const char* hostname) {
 
     printf("Getting balvi-api config from %s/config\n", hostname);
     int result = http_client_request_sync(cyw43_arch_async_context(), &req);
+    
     altcp_tls_free_config(req.tls_config);
 
     if (result != 0) {
-        printf("Balvi API config request failed\n");
-    } else {
-        printf("Balvi API config request successful\n");
-
+        printf("Balvi API config request failed with error: %d\n", result);
+        return;
+    }
+    
+    printf("Balvi API config request successful\n");
+    if (response_len > 0) {
         // Parse the JSON response
         if (parse_balvi_config(response_buffer, response_len, &current_config) == 0) {
             printf("Config parsed successfully!\n");
@@ -116,6 +127,8 @@ void balvi_api_get_config(const char* hostname) {
         } else {
             printf("Failed to parse config JSON\n");
         }
+    } else {
+        printf("ERROR: No response data received\n");
     }
 }
 

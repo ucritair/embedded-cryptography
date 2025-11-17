@@ -195,7 +195,7 @@ void core1_tfhe_encrypt_sensors_entry(void) {
     crypto_shared->error_code = 0;
 
     // Decode base64 TFHE public key
-    uint8_t pk_bytes[8192];
+    uint8_t pk_bytes[TFHE_PUBLIC_KEY_BINARY_SIZE];  // Buffer for decoded TFHE public key
     size_t pk_len = 0;
     int ret = mbedtls_base64_decode(
         pk_bytes,

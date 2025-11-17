@@ -91,8 +91,10 @@ if [ "$LOCAL_BUILD_ONLY" == "yes" ]; then
     if [ -f "$OUTPUT_FILE" ]; then
         mv "$OUTPUT_FILE" "$RENAMED_FILE"
         echo -e "${GREEN}Built: rp2350/build/$RENAMED_FILE${NC}"
+    elif [ -f "$RENAMED_FILE" ]; then
+        echo -e "${GREEN}Built: rp2350/build/$RENAMED_FILE${NC}"
     else
-        echo "Error: Build failed, could not find $OUTPUT_FILE"
+        echo "Error: Build failed, could not find $OUTPUT_FILE or $RENAMED_FILE"
         exit 1
     fi
 

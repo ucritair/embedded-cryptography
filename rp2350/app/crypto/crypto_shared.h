@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "psram_config.h"
+#include "buffer_config.h"
 
 // Shared memory structure for Core0 <-> Core1 communication
 // Lives at the start of the SHARED_MEM region in PSRAM
@@ -25,9 +26,9 @@ typedef struct {
     size_t proof_b64_len;
 
     // TFHE encryption inputs/outputs (for sensor data)
-    char tfhe_pk_b64[10240];      // Base64 TFHE public key
+    char tfhe_pk_b64[SHARED_TFHE_PK_B64_SIZE];      // Base64 TFHE public key
     uint32_t sensor_values[5];    // 5 sensor values to encrypt
-    char ct_b64[5][12288];        // 5 base64-encoded ciphertexts (one per sensor, ~10KB each)
+    char ct_b64[SHARED_CIPHERTEXT_SLOTS][SHARED_CIPHERTEXT_SIZE];        // 5 base64-encoded ciphertexts
     size_t ct_b64_lens[5];        // Length of each base64 ciphertext
 
     // Control flags
