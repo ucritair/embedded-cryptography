@@ -23,6 +23,8 @@ typedef enum {
     MSG_TYPE_WIFI_SCAN_REQUEST = 0x52,
     MSG_TYPE_REBOOT_TO_BOOTLOADER = 0x53,
     MSG_TYPE_ZKP_AUTHENTICATE = 0x54,
+    MSG_TYPE_ZKP_SECRET_GET = 0x56,
+    MSG_TYPE_ZKP_SECRET_SET = 0x57,
 } host_to_device_msg_type_t;
 
 // Sent from Device to Host
@@ -36,6 +38,8 @@ typedef enum {
     MSG_TYPE_REBOOT_TO_BOOTLOADER_ACK = 0x53,
     MSG_TYPE_ZKP_AUTHENTICATE_RESPONSE = 0x54,
     MSG_TYPE_ZKP_AUTH_STATUS = 0x55,  // Unsolicited status updates during auth
+    MSG_TYPE_ZKP_SECRET_GET_RESPONSE = 0x56,
+    MSG_TYPE_ZKP_SECRET_SET_ACK = 0x57,
 } device_to_host_msg_type_t;
 
 // --- Message Payloads ---
@@ -94,12 +98,23 @@ typedef struct __attribute__((__packed__)) {
 // Payload for ZKP authentication response
 #define MAX_ACCESS_TOKEN_LEN 512
 #define MAX_TIMESTAMP_LEN 32
+#define MAX_ZKP_SECRET_LEN 256
 
 typedef struct __attribute__((__packed__)) {
     uint8_t success;       // 1 if authentication successful, 0 if failed
     char access_token[MAX_ACCESS_TOKEN_LEN];
     char expires_at[MAX_TIMESTAMP_LEN];
 } msg_payload_zkp_authenticate_response_t;
+
+// Payload for ZKP secret set (host -> device)
+typedef struct __attribute__((__packed__)) {
+    char secret_b64[MAX_ZKP_SECRET_LEN];  // Base64-encoded secret
+} msg_payload_zkp_secret_set_t;
+
+// Payload for ZKP secret get response (device -> host)
+typedef struct __attribute__((__packed__)) {
+    char secret_b64[MAX_ZKP_SECRET_LEN];  // Base64-encoded secret
+} msg_payload_zkp_secret_get_response_t;
 
 // Payload for ZKP authentication status updates (unsolicited)
 #define MAX_STATUS_MESSAGE_LEN 128

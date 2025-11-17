@@ -8,6 +8,8 @@ add_executable(cat_rp2350
     main.c
     tf_port.c
     ipc.c
+    cli_commands.c
+    FreeRTOS_CLI.c
     cloud/balvi_config.c
     http/httpss_client.c
     http/http_post_client.c

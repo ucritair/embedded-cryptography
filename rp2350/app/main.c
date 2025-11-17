@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/time.h>
 #include "pico/stdlib.h"
 #include "pico/bootrom.h"
@@ -7,6 +8,7 @@
 #include "TinyFrame.h"
 #include "tf_port.h"
 #include "ipc.h"
+#include "cli_commands.h"
 
 #include "pico/cyw43_arch.h"
 #include "lwip/pbuf.h"
@@ -130,11 +132,14 @@ static bool connect_to_wifi(uint8_t auth_mode)
 }
 
 // TinyFrame instance
-static TinyFrame *tf;
+TinyFrame *tf;
 
 // Global auth token storage
 static char g_access_token[512] = "";  // Empty initially, filled by ZKP auth
 static bool g_auth_token_valid = false;
+
+// Global ZKP secret storage (allocated in SRAM, not pointer)
+char g_zkp_secret_b64[MAX_ZKP_SECRET_LEN] = "AQAAAAIAAAADAAAABAAAAAUAAAAGAAAABwAAAAgAAAAJAAAACgAAAAsAAAAMAAAADQAAAA4AAAAPAAAAEAAAAA==";
 
 /**
  * Listener for the firmware version query
@@ -185,6 +190,11 @@ TF_Result wifi_connect_listener(TinyFrame *tf, TF_Msg *msg)
         if (connect_to_wifi(credentials->auth_mode)) {
             // On success, update state and send ACK
             app_state = APP_STATE_WIFI_CONNECTED_IDLE;
+            
+            // Initialize SNTP for time sync
+            printf("Initializing SNTP...\n");
+            sntp_init_func();
+            
             TF_Respond(tf, msg); // ACK indicates success
         } else {
             // On failure, do not send an ACK. The host will time out.
@@ -288,6 +298,8 @@ TF_Result sensor_data_listener(TinyFrame *tf, TF_Msg *msg)
         // Start TFHE encryption on Core1
         printf("Launching Core1 for TFHE encryption...\n");
 
+        uint64_t tfhe_start_time = time_us_64();
+
         // Reset Core1 first (in case it was running from previous operation)
         multicore_reset_core1();
 
@@ -311,7 +323,12 @@ TF_Result sensor_data_listener(TinyFrame *tf, TF_Msg *msg)
             }
         }
 
+        uint64_t tfhe_end_time = time_us_64();
+        uint64_t tfhe_duration_ms = (tfhe_end_time - tfhe_start_time) / 1000;
+        
         printf("Core1 completed with error code: %d\n", crypto_shared->error_code);
+        printf("[TFHE] Encryption duration: %llu ms (%.2f seconds)\n", 
+               tfhe_duration_ms, tfhe_duration_ms / 1000.0);
 
         // Reset Core1 after completion (prepare for next operation)
         multicore_reset_core1();
@@ -537,13 +554,30 @@ TF_Result zkp_authenticate_listener(TinyFrame *tf, TF_Msg *msg)
     static msg_payload_zkp_authenticate_response_t response;
     memset(&response, 0, sizeof(response));
 
+    // Initialize shared memory for ZKP operations
+    if (crypto_shared == NULL) {
+        crypto_shared = (crypto_shared_t*)CRYPTO_SHARED_ADDR;
+    }
+    
+    // Set the secret for ZKP operations (Core0 -> Core1)
+    strcpy(crypto_shared->secret_b64, g_zkp_secret_b64);
+    printf("[Core0] ZKP secret set: %s...\n", crypto_shared->secret_b64);
+
     // Perform full authentication flow (blocking)
     // This will take several minutes due to proof generation on Core1
     printf("[ZKP Auth] Starting authentication flow (this will take ~10 minutes)...\n");
 
+    uint64_t zkp_start_time = time_us_64();
+
     static auth_verify_response_t auth_result = {0};
     memset(&auth_result, 0, sizeof(auth_result));
     int rc = perform_zkp_authentication("air.gp.xyz", &auth_result);
+
+    uint64_t zkp_end_time = time_us_64();
+    uint64_t zkp_duration_ms = (zkp_end_time - zkp_start_time) / 1000;
+    
+    printf("[ZKP Auth] Total duration: %llu ms (%.2f minutes)\n", 
+           zkp_duration_ms, zkp_duration_ms / 60000.0);
 
     if (rc == 0 && auth_result.valid) {
         // Success - copy token and expiry to response
@@ -593,6 +627,10 @@ int compute_parent_on_core1(uint8_t* parent_out) {
 	memset(crypto_shared, 0, sizeof(crypto_shared_t));
 	crypto_shared->compute_done = false;
 	crypto_shared->error_code = 0;
+
+	// Set the secret for ZKP operations (Core0 -> Core1) - after memset!
+	strcpy(crypto_shared->secret_b64, g_zkp_secret_b64);
+	printf("[Core0] ZKP secret set for parent computation: %.32s...\n", crypto_shared->secret_b64);
 
 	// Stop Core1 if running
 	multicore_reset_core1();
@@ -647,6 +685,10 @@ int generate_proof_on_core1(const char* witness_b64, const char* nonce_b64, uint
 	crypto_shared->compute_done = false;
 	crypto_shared->error_code = 0;
 
+	// Set the secret for ZKP operations (Core0 -> Core1) - after memset!
+	strcpy(crypto_shared->secret_b64, g_zkp_secret_b64);
+	printf("[Core0] ZKP secret set for proof generation: %.32s...\n", crypto_shared->secret_b64);
+
 	// Copy witness and nonce to shared memory (avoid stack on Core0)
 	strncpy(crypto_shared->witness_b64, witness_b64, sizeof(crypto_shared->witness_b64) - 1);
 	strncpy(crypto_shared->nonce_b64, nonce_b64, sizeof(crypto_shared->nonce_b64) - 1);
@@ -700,6 +742,15 @@ int perform_zkp_authentication(const char* hostname, auth_verify_response_t* aut
     if (hostname == NULL || auth_response == NULL) {
         return -1;
     }
+
+    // Initialize shared memory for ZKP operations
+    if (crypto_shared == NULL) {
+        crypto_shared = (crypto_shared_t*)CRYPTO_SHARED_ADDR;
+    }
+    
+    // Set the secret for ZKP operations (Core0 -> Core1)
+    strcpy(crypto_shared->secret_b64, g_zkp_secret_b64);
+    printf("[Core0] ZKP secret set for authentication: %.32s...\n", crypto_shared->secret_b64);
 
     int rc;  // Declare rc for HTTP tests
 
@@ -869,11 +920,17 @@ int perform_zkp_authentication(const char* hostname, auth_verify_response_t* aut
     }
 }
 
+// CLI processing task
+void cli_task(__unused void *params) {
+    vRegisterCLICommands();
+    vCLITask(params);
+}
+
 void main_task(__unused void *params) {
     stdio_init_all();
     tf_port_init();
 
-    printf("Hello, Pico!\n"); 
+    printf("Hello, Pico v%d.%d.%d!\n", FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH);
     printf("Querying Rust library version...\n");
     printf("battery_api_version(): 0x%X\n", battery_api_version());
 
@@ -895,7 +952,7 @@ void main_task(__unused void *params) {
 
     cyw43_arch_enable_sta_mode();
 
-    // Initialize TinyFrame
+    // Initialize TinyFrame (for other commands, not secret management)
     tf = TF_Init(TF_MASTER);
     TF_AddTypeListener(tf, MSG_TYPE_FIRMWARE_VERSION_QUERY, firmware_version_listener);
     TF_AddTypeListener(tf, MSG_TYPE_PROTOCOL_VERSION_QUERY, protocol_version_listener);
@@ -904,8 +961,80 @@ void main_task(__unused void *params) {
     TF_AddTypeListener(tf, MSG_TYPE_WIFI_SCAN_REQUEST, wifi_scan_listener);
     TF_AddTypeListener(tf, MSG_TYPE_REBOOT_TO_BOOTLOADER, reboot_to_bootloader_listener);
     TF_AddTypeListener(tf, MSG_TYPE_ZKP_AUTHENTICATE, zkp_authenticate_listener);
+    // Note: Removed MSG_TYPE_ZKP_SECRET_GET and MSG_TYPE_ZKP_SECRET_SET - now using CLI
 
-    printf("[RP2350]: Listening for UART Messages\n");
+#if 0
+    printf("\n=== STANDALONE TEST MODE ===\n");
+    
+    // Step 1: Emulate WiFi scan request
+    printf("\n=== Step 1: WiFi Scan ===\n");
+    TF_Msg scan_msg = {0};
+    scan_msg.type = MSG_TYPE_WIFI_SCAN_REQUEST;
+    scan_msg.data = NULL;
+    scan_msg.len = 0;
+    wifi_scan_listener(tf, &scan_msg);
+    
+    // Step 2: Emulate WiFi connect with "iphone" credentials
+    printf("\n=== Step 2: WiFi Connect ===\n");
+    msg_payload_wifi_connect_t wifi_credentials = {0};
+    strncpy(wifi_credentials.ssid, "iphone", sizeof(wifi_credentials.ssid) - 1);
+    strncpy(wifi_credentials.password, "bilalwasim", sizeof(wifi_credentials.password) - 1);
+    wifi_credentials.auth_mode = WIFI_AUTH_WPA2;
+    
+    TF_Msg connect_msg = {0};
+    connect_msg.type = MSG_TYPE_WIFI_CONNECT;
+    connect_msg.data = (const uint8_t*)&wifi_credentials;
+    connect_msg.len = sizeof(wifi_credentials);
+    wifi_connect_listener(tf, &connect_msg);
+    
+    if (app_state == APP_STATE_WIFI_CONNECTED_IDLE) {
+        printf("WiFi connected successfully!\n");
+        
+        // Initialize SNTP for time sync
+        sntp_init_func();
+        vTaskDelay(pdMS_TO_TICKS(5000)); // Wait for time sync
+        
+        // Step 3: Emulate ZKP authentication request
+        printf("\n=== Step 3: ZKP Authentication ===\n");
+        TF_Msg zkp_msg = {0};
+        zkp_msg.type = MSG_TYPE_ZKP_AUTHENTICATE;
+        zkp_msg.data = NULL;
+        zkp_msg.len = 0;
+        zkp_authenticate_listener(tf, &zkp_msg);
+        
+        // Step 4: Loop sending random sensor data every 10 seconds
+        printf("\n=== Step 4: Sensor Data Loop ===\n");
+        while (true) {
+            // Generate random sensor data
+            msg_payload_sensor_data_t sensor_data = {0};
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                sensor_data.sensor_values[i] = rand() % 256; // Random 0-255
+            }
+            
+            printf("Sending sensor data: [");
+            for (int i = 0; i < NUM_SENSORS; i++) {
+                printf("%u", sensor_data.sensor_values[i]);
+                if (i < NUM_SENSORS - 1) printf(", ");
+            }
+            printf("]\n");
+            
+            // Emulate sensor data message
+            TF_Msg sensor_msg = {0};
+            sensor_msg.type = MSG_TYPE_SENSOR_DATA;
+            sensor_msg.data = (const uint8_t*)&sensor_data;
+            sensor_msg.len = sizeof(sensor_data);
+            sensor_data_listener(tf, &sensor_msg);
+            
+            printf("Waiting 10 seconds before next sensor data...\n");
+            vTaskDelay(pdMS_TO_TICKS(10000)); // 10 second delay
+        }
+    } else {
+        printf("WiFi connection failed, entering normal mode\n");
+    }
+#endif
+
+    // Fallback: Original TinyFrame message processing loop
+    printf("[RP2350]: Entering TinyFrame message processing mode\n");
     while (true) {
         // TinyFrame processing
         while (uart_is_readable(uart0)) {
@@ -934,6 +1063,10 @@ void main_task(__unused void *params) {
 int main(void) {
     // Start the main thread
     xTaskCreate(main_task, "MainThread", MAIN_TASK_STACK_SIZE, NULL, MAIN_TASK_PRIORITY, NULL);
+    
+    // Start the CLI task
+    xTaskCreate(cli_task, "CLITask", 2048, NULL, MAIN_TASK_PRIORITY + 1, NULL);
+    
     vTaskStartScheduler();
 
     return 0;
