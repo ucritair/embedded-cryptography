@@ -8,7 +8,7 @@ set -e  # Exit on error
 # --- Firmware Version ---
 FIRMWARE_VERSION_MAJOR=1
 FIRMWARE_VERSION_MINOR=0
-FIRMWARE_VERSION_PATCH=5
+FIRMWARE_VERSION_PATCH=6
 
 # Colors for output
 GREEN='\033[0;32m'

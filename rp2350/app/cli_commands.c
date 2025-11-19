@@ -11,6 +11,7 @@ extern char g_zkp_secret_b64[];
 extern TinyFrame *tf;
 
 static BaseType_t prvHelpCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
+static BaseType_t prvVersionCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 static BaseType_t prvStatusCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 static BaseType_t prvGetSecretCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
 static BaseType_t prvSetSecretCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString);
@@ -20,6 +21,10 @@ static BaseType_t prvSensorDataCommand(char *pcWriteBuffer, size_t xWriteBufferL
 
 static const CLI_Command_Definition_t xHelpCommand = {
     "help", "help: Lists all commands\r\n", prvHelpCommand, 0
+};
+
+static const CLI_Command_Definition_t xVersionCommand = {
+    "version", "version: Show firmware version\r\n", prvVersionCommand, 0
 };
 
 static const CLI_Command_Definition_t xStatusCommand = {
@@ -48,13 +53,20 @@ static const CLI_Command_Definition_t xSensorDataCommand = {
 
 static BaseType_t prvHelpCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString) {
     (void)pcCommandString;
-    strncpy(pcWriteBuffer, "Commands: help, status, get_secret, set_secret, wifi_connect, zkp_auth, sensor_data\r\n", xWriteBufferLen);
+    strncpy(pcWriteBuffer, "Commands: help, version, status, get_secret, set_secret, wifi_connect, zkp_auth, sensor_data\r\n", xWriteBufferLen);
+    return pdFALSE;
+}
+
+static BaseType_t prvVersionCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString) {
+    (void)pcCommandString;
+    snprintf(pcWriteBuffer, xWriteBufferLen, "Firmware version: %d.%d.%d\r\n",
+             FIRMWARE_VERSION_MAJOR, FIRMWARE_VERSION_MINOR, FIRMWARE_VERSION_PATCH);
     return pdFALSE;
 }
 
 static BaseType_t prvStatusCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString) {
     (void)pcCommandString;
-    snprintf(pcWriteBuffer, xWriteBufferLen, "System OK - Free heap: %u bytes\r\n", 
+    snprintf(pcWriteBuffer, xWriteBufferLen, "System OK - Free heap: %u bytes\r\n",
              (unsigned int)xPortGetFreeHeapSize());
     return pdFALSE;
 }
@@ -89,33 +101,94 @@ static BaseType_t prvSetSecretCommand(char *pcWriteBuffer, size_t xWriteBufferLe
 }
 
 static BaseType_t prvWifiConnectCommand(char *pcWriteBuffer, size_t xWriteBufferLen, const char *pcCommandString) {
-    const char *ssid, *password;
-    BaseType_t ssidLen, passwordLen;
-    
-    ssid = FreeRTOS_CLIGetParameter(pcCommandString, 1, &ssidLen);
-    password = FreeRTOS_CLIGetParameter(pcCommandString, 2, &passwordLen);
-    
-    if (!ssid || !password || ssidLen == 0 || passwordLen == 0) {
-        strncpy(pcWriteBuffer, "Error: Missing SSID or password\r\n", xWriteBufferLen);
+    char ssid[MAX_SSID_LEN + 1] = {0};
+    char password[MAX_PASSWORD_LEN + 1] = {0};
+    const char *p = pcCommandString;
+
+    // Skip "wifi_connect"
+    while (*p && *p != ' ') p++;
+    while (*p == ' ') p++;
+
+    if (*p == '\0') {
+        strncpy(pcWriteBuffer, "Error: Missing SSID and password\r\nUsage: wifi_connect SSID PASSWORD or wifi_connect \"SSID with spaces\" \"password\"\r\n", xWriteBufferLen);
         return pdFALSE;
     }
-    
+
+    // Parse SSID (quoted or unquoted)
+    const char *ssid_start, *ssid_end;
+    if (*p == '"') {
+        // Quoted SSID
+        ssid_start = ++p;
+        ssid_end = strchr(p, '"');
+        if (!ssid_end) {
+            strncpy(pcWriteBuffer, "Error: Missing closing quote for SSID\r\n", xWriteBufferLen);
+            return pdFALSE;
+        }
+        p = ssid_end + 1;
+    } else {
+        // Unquoted SSID - read until space
+        ssid_start = p;
+        while (*p && *p != ' ') p++;
+        ssid_end = p;
+    }
+
+    size_t ssid_len = ssid_end - ssid_start;
+    if (ssid_len == 0 || ssid_len > MAX_SSID_LEN) {
+        snprintf(pcWriteBuffer, xWriteBufferLen, "Error: SSID length must be 1-%d chars\r\n", MAX_SSID_LEN);
+        return pdFALSE;
+    }
+    strncpy(ssid, ssid_start, ssid_len);
+    ssid[ssid_len] = '\0';
+
+    // Skip spaces before password
+    while (*p == ' ') p++;
+
+    if (*p == '\0') {
+        strncpy(pcWriteBuffer, "Error: Missing password\r\n", xWriteBufferLen);
+        return pdFALSE;
+    }
+
+    // Parse password (quoted or unquoted)
+    const char *pwd_start, *pwd_end;
+    if (*p == '"') {
+        // Quoted password
+        pwd_start = ++p;
+        pwd_end = strchr(p, '"');
+        if (!pwd_end) {
+            strncpy(pcWriteBuffer, "Error: Missing closing quote for password\r\n", xWriteBufferLen);
+            return pdFALSE;
+        }
+    } else {
+        // Unquoted password - read until end
+        pwd_start = p;
+        while (*p && *p != '\r' && *p != '\n') p++;
+        pwd_end = p;
+    }
+
+    size_t pwd_len = pwd_end - pwd_start;
+    if (pwd_len == 0 || pwd_len > MAX_PASSWORD_LEN) {
+        snprintf(pcWriteBuffer, xWriteBufferLen, "Error: Password length must be 1-%d chars\r\n", MAX_PASSWORD_LEN);
+        return pdFALSE;
+    }
+    strncpy(password, pwd_start, pwd_len);
+    password[pwd_len] = '\0';
+
+    // Build credentials and send
     msg_payload_wifi_connect_t wifi_credentials = {0};
-    strncpy(wifi_credentials.ssid, ssid, ssidLen < MAX_SSID_LEN ? ssidLen : MAX_SSID_LEN);
-    strncpy(wifi_credentials.password, password, passwordLen < MAX_PASSWORD_LEN ? passwordLen : MAX_PASSWORD_LEN);
+    strncpy(wifi_credentials.ssid, ssid, MAX_SSID_LEN);
+    strncpy(wifi_credentials.password, password, MAX_PASSWORD_LEN);
     wifi_credentials.auth_mode = WIFI_AUTH_WPA2;
-    
+
     TF_Msg connect_msg = {0};
     connect_msg.type = MSG_TYPE_WIFI_CONNECT;
     connect_msg.data = (const uint8_t*)&wifi_credentials;
     connect_msg.len = sizeof(wifi_credentials);
-    
-    printf("Connecting to WiFi: %.*s\r\n", ssidLen, ssid);
-    
-    // Call the existing listener directly
+
+    printf("Connecting to WiFi: %s (password: %s)\r\n", ssid, password);
+
     extern TF_Result wifi_connect_listener(TinyFrame *tf, TF_Msg *msg);
     wifi_connect_listener(tf, &connect_msg);
-    
+
     strncpy(pcWriteBuffer, "WiFi connection initiated\r\n", xWriteBufferLen);
     return pdFALSE;
 }
@@ -171,6 +244,7 @@ static BaseType_t prvSensorDataCommand(char *pcWriteBuffer, size_t xWriteBufferL
 
 void vRegisterCLICommands(void) {
     FreeRTOS_CLIRegisterCommand(&xHelpCommand);
+    FreeRTOS_CLIRegisterCommand(&xVersionCommand);
     FreeRTOS_CLIRegisterCommand(&xStatusCommand);
     FreeRTOS_CLIRegisterCommand(&xGetSecretCommand);
     FreeRTOS_CLIRegisterCommand(&xSetSecretCommand);
